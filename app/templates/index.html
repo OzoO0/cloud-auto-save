@@ -1,0 +1,1930 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>网盘自动转存</title>
+  <!-- CSS -->
+  <link rel="stylesheet" href="./static/css/bootstrap.min.css">
+  <link rel="stylesheet" href="./static/css/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="./static/css/dashboard.css">
+  <!-- Bootstrap JS -->
+  <script src="./static/js/jquery-3.5.1.slim.min.js"></script>
+  <script src="./static/js/bootstrap.bundle.min.js"></script>
+  <!-- Vue.js -->
+  <script src="./static/js/vue@2.js"></script>
+  <script src="./static/js/axios.min.js"></script>
+  <script src="./static/js/v-jsoneditor.min.js"></script>
+</head>
+
+<body>
+  <div id="app">
+
+    <!-- Apple Style Top Navigation -->
+    <nav class="apple-navbar">
+      <a class="navbar-brand" href="#"><i class="bi bi-clouds"></i> 网盘自动转存</a>
+      <div class="segmented-control">
+        <button type="button" class="seg-btn" :class="{active: activeTab === 'config'}" @click="changeTab('config')">
+          <i class="bi bi-gear-fill"></i> 系统配置
+        </button>
+        <button type="button" class="seg-btn" :class="{active: activeTab === 'tasklist'}" @click="changeTab('tasklist')">
+          <i class="bi bi-list-task"></i> 任务列表
+        </button>
+      </div>
+      <div class="navbar-actions">
+        <a href="/logout"><i class="bi bi-box-arrow-right"></i> 退出</a>
+      </div>
+    </nav>
+
+    <div class="main-content">
+      <main>
+        <form @submit.prevent="saveConfig" @keydown.enter.prevent>
+
+          <div v-if="activeTab === 'config'">
+
+            <!-- Cookie Card -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <div class="card-title">
+                  <i class="bi bi-cookie"></i>
+                  <h2>Cookie</h2>
+                </div>
+                <div class="card-actions">
+                  <button type="button" class="btn btn-outline-primary btn-sm" @click="addCookie()"><i class="bi bi-plus"></i></button>
+                </div>
+              </div>
+              <div class="config-card-body">
+                <p>1. 所有账号执行签到，纯<a href="https://github.com/Cp0204/quark-auto-save/wiki/使用技巧集锦#每日签到领空间">签到</a>只需移动端参数即可！</p>
+                <p>2. 仅第一个账号执行转存，请自行确认顺序。<b>最好是手机验证码<a target="_blank" href="https://pan.quark.cn/">登录</a>，CK比较完整！</b>如需签到参数附在CK后面。</p>
+                <div v-for="(value, index) in formData.cookie" :key="index" class="input-group mb-2">
+                  <input type="text" v-model="formData.cookie[index]" class="form-control" placeholder="打开 pan.quark.com 按 F12 抓取">
+                  <div class="input-group-append">
+                    <button type="button" class="btn btn-outline-danger btn-sm" @click="removeCookie(index)"><i class="bi bi-dash"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 多网盘账户 Card -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <div class="card-title">
+                  <i class="bi bi-people"></i>
+                  <h2>多网盘账户</h2>
+                </div>
+                <div class="card-actions">
+                  <button type="button" class="btn btn-outline-primary btn-sm" @click="addAccount()"><i class="bi bi-plus"></i></button>
+                </div>
+              </div>
+              <div class="config-card-body">
+                <p>配置多个网盘账户，支持夸克、115等网盘的自动转存</p>
+                <div v-if="formData.accounts && formData.accounts.length === 0" class="alert alert-info">
+                  <i class="bi bi-info-circle"></i> 暂无多网盘账户配置。如需使用多网盘功能，请点击 + 添加账户。
+                  <br><small>提示：如果只使用夸克网盘，可以继续使用上方的 Cookie 配置，无需配置此项。</small>
+                </div>
+                <div v-for="(account, index) in formData.accounts" :key="'account_'+index" class="card mb-2">
+                  <div class="card-body p-2">
+                    <div class="row align-items-center">
+                      <div class="col-md-3">
+                        <div class="input-group input-group-sm">
+                          <div class="input-group-prepend">
+                            <span class="input-group-text"><i class="bi bi-tag"></i></span>
+                          </div>
+                          <input type="text" v-model="account.name" class="form-control" placeholder="账户名称" 
+                                 @focus="rememberAccountName(index, account.name)" 
+                                 @blur="updateTasksAccountName(index, account.name)">
+                        </div>
+                      </div>
+                      <div class="col-md-2">
+                        <select v-model="account.drive_type" class="form-control form-control-sm" :disabled="isTokenProtectedAccount(account)">
+                          <option v-for="dt in driveTypes" :key="dt.value" :value="dt.value">
+                            {{ dt.label }}
+                          </option>
+                        </select>
+                      </div>
+                      <div class="col-md-5">
+                        <div class="input-group input-group-sm">
+                          <input type="text" v-model="account.cookie" class="form-control" 
+                                 :placeholder="account.drive_type === 'aliyun' ? 'refresh_token' : (account.drive_type === 'xunlei' ? 'refresh_token' : 'Cookie')"
+                                 :disabled="isTokenProtectedAccount(account)"
+                                 :title="isTokenProtectedAccount(account) ? 'Token 受保护，点击编辑按钮修改' : ''">
+                          <div class="input-group-append" v-if="account.drive_type === 'aliyun'">
+                            <button type="button" class="btn btn-outline-info" @click="showAliyunQrcode(index)" title="扫码获取 refresh_token">
+                              <i class="bi bi-qr-code-scan"></i>
+                            </button>
+                            <button type="button" class="btn btn-outline-warning" @click="showManualTokenEdit(index)" title="手动修改 Token">
+                              <i class="bi bi-pencil"></i>
+                            </button>
+                            <button type="button" class="btn btn-outline-success" @click="refreshToken(index, 'aliyun')" title="刷新 Token" :disabled="tokenRefreshing[index]">
+                              <i class="bi" :class="tokenRefreshing[index] ? 'bi-arrow-repeat spin' : 'bi-arrow-repeat'"></i>
+                            </button>
+                          </div>
+                          <div class="input-group-append" v-if="account.drive_type === 'xunlei'">
+                            <button type="button" class="btn btn-outline-warning" @click="showManualTokenEdit(index)" title="手动修改 Token">
+                              <i class="bi bi-pencil"></i>
+                            </button>
+                            <button type="button" class="btn btn-outline-success" @click="refreshToken(index, 'xunlei')" title="刷新 Token" :disabled="tokenRefreshing[index]">
+                              <i class="bi" :class="tokenRefreshing[index] ? 'bi-arrow-repeat spin' : 'bi-arrow-repeat'"></i>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="col-md-2 text-right">
+                        <div class="btn-group btn-group-sm">
+                          <button type="button" class="btn" :class="account.enabled ? 'btn-success' : 'btn-outline-secondary'" @click="account.enabled = !account.enabled" :title="account.enabled ? '已启用' : '已禁用'">
+                            <i class="bi" :class="account.enabled ? 'bi-check-circle' : 'bi-x-circle'"></i>
+                          </button>
+                          <button type="button" class="btn" :class="account.default ? 'btn-warning' : 'btn-outline-secondary'" @click="setDefaultAccount(index)" title="设为默认">
+                            <i class="bi bi-star" :class="account.default ? 'bi-star-fill' : ''"></i>
+                          </button>
+                          <button type="button" class="btn btn-outline-danger" @click="removeAccount(index)">
+                            <i class="bi bi-trash"></i>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 定时规则 Card -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <div class="card-title">
+                  <i class="bi bi-clock"></i>
+                  <h2>定时规则</h2>
+                  <a class="help-link" target="_blank" href="https://tool.lu/crontab/" title="CRON时间计算器">?</a>
+                </div>
+              </div>
+              <div class="config-card-body">
+                <div class="input-group mb-2">
+                  <div class="input-group-prepend">
+                    <span class="input-group-text">Crontab</span>
+                  </div>
+                  <input type="text" v-model="formData.crontab" class="form-control" placeholder="必填">
+                </div>
+              </div>
+            </div>
+
+            <!-- 通知 Card -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <div class="card-title">
+                  <i class="bi bi-bell"></i>
+                  <h2>通知</h2>
+                  <a class="help-link" href="https://github.com/Cp0204/quark-auto-save/wiki/通知推送服务配置" target="_blank">?</a>
+                </div>
+                <div class="card-actions">
+                  <button type="button" class="btn btn-success btn-sm" title="通知推送测试" @click="testPush()"><i class="bi bi-lightning"></i></button>
+                  <button type="button" class="btn btn-outline-primary btn-sm" @click="addPush()"><i class="bi bi-plus"></i></button>
+                </div>
+              </div>
+              <div class="config-card-body">
+                <div v-for="(value, key) in formData.push_config" :key="key" class="input-group mb-2">
+                  <div class="input-group-prepend">
+                    <span class="input-group-text" v-html="key"></span>
+                  </div>
+                  <div class="input-group-prepend" v-if="(key == 'DEER_KEY' || key == 'PUSH_KEY')">
+                    <a type="button" class="btn btn-warning btn-sm" target="_blank" href="https://sct.ftqq.com/r/13249" title="Server酱推荐计划"><i class="bi bi-award"></i></a>
+                  </div>
+                  <input type="text" v-model="formData.push_config[key]" class="form-control">
+                  <div class="input-group-append">
+                    <button type="button" class="btn btn-outline-danger btn-sm" @click="removePush(key)"><i class="bi bi-dash"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 插件 Card -->
+            <div class="config-card" v-if="Object.keys(getAvailablePlugins(formData.plugins)).length">
+              <div class="config-card-header">
+                <div class="card-title">
+                  <i class="bi bi-plug"></i>
+                  <h2>插件</h2>
+                  <a class="help-link" href="https://github.com/Cp0204/quark-auto-save/wiki/插件配置" target="_blank">?</a>
+                </div>
+              </div>
+              <div class="config-card-body">
+                <div v-for="(plugin, pluginName) in getAvailablePlugins(formData.plugins)" :key="pluginName">
+                  <div class="collapse-toggle" data-toggle="collapse" :data-target="'#collapse_'+pluginName" aria-expanded="true" :aria-controls="'collapse_'+pluginName">
+                    <i class="bi bi-caret-right-fill"></i> <span v-html="`${pluginName}`"></span>
+                  </div>
+                  <div class="collapse ml-3" :id="'collapse_'+pluginName">
+                    <div v-for="(value, key) in plugin" :key="key" class="form-group row">
+                      <label class="col-sm-2 col-form-label" v-html="key"></label>
+                      <div class="col-sm-10">
+                        <input type="text" v-model="formData.plugins[pluginName][key]" class="form-control">
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 魔法匹配 Card -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <div class="card-title">
+                  <i class="bi bi-magic"></i>
+                  <h2>魔法匹配</h2>
+                  <a class="help-link" href="https://github.com/Cp0204/quark-auto-save/wiki/正则处理教程#21-魔法匹配" target="_blank">?</a>
+                </div>
+                <div class="card-actions">
+                  <button type="button" class="btn btn-outline-primary btn-sm" @click="addMagicRegex()"><i class="bi bi-plus"></i></button>
+                </div>
+              </div>
+              <div class="config-card-body">
+                <div v-for="(value, key) in formData.magic_regex" :key="key" class="form-group mb-2">
+                  <div class="input-group">
+                    <div class="input-group-prepend">
+                      <span class="input-group-text">魔法名</span>
+                    </div>
+                    <input type="text" :data-oldkey="key" v-model="key" class="form-control" @change="updateMagicRegexKey($event.target.dataset.oldkey, $event.target.value)" placeholder="自定义名称">
+                    <div class="input-group-prepend">
+                      <span class="input-group-text">正则处理</span>
+                    </div>
+                    <input type="text" v-model="value.pattern" class="form-control" placeholder="匹配表达式">
+                    <input type="text" v-model="value.replace" class="form-control" placeholder="替换表达式">
+                    <div class="input-group-append">
+                      <button type="button" class="btn btn-outline-danger btn-sm" @click="removeMagicRegex(key)"><i class="bi bi-dash"></i></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+
+            <!-- API Card -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <div class="card-title">
+                  <i class="bi bi-link-45deg"></i>
+                  <h2>API</h2>
+                  <a class="help-link" href="https://github.com/Cp0204/quark-auto-save/wiki/API接口" target="_blank">?</a>
+                </div>
+              </div>
+              <div class="config-card-body">
+                <div class="input-group">
+                  <div class="input-group-prepend">
+                    <span class="input-group-text">Token</span>
+                  </div>
+                  <input type="text" v-model="formData.api_token" class="form-control" disabled>
+                </div>
+              </div>
+            </div>
+
+            <!-- 资源搜索 Card -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <div class="card-title">
+                  <i class="bi bi-search"></i>
+                  <h2>资源搜索</h2>
+                </div>
+              </div>
+              <div class="config-card-body">
+                <div class="collapse-toggle" data-toggle="collapse" data-target="#collapse_net" aria-expanded="true" aria-controls="collapse_net">
+                  <i class="bi bi-caret-right-fill"></i> 网络公开搜索
+                </div>
+                <div class="collapse show ml-3" id="collapse_net">
+                  <div class="form-group row">
+                    <label class="col-sm-2 col-form-label">启用</label>
+                    <div class="col-sm-10 d-flex align-items-center">
+                      <input type="checkbox" class="form-check-input" v-model="formData.source.net.enable" placeholder="是否启用网络公开搜索，默认启用">
+                    </div>
+                  </div>
+                </div>
+                <div class="collapse-toggle" data-toggle="collapse" data-target="#collapse_cloudsaver" aria-expanded="true" aria-controls="collapse_cloudsaver">
+                  <i class="bi bi-caret-right-fill"></i> CloudSaver
+                  <a class="help-link ml-2" href="https://github.com/Cp0204/quark-auto-save/wiki/CloudSaver搜索源" target="_blank">?</a>
+                </div>
+                <div class="collapse show ml-3" id="collapse_cloudsaver">
+                  <div class="form-group row">
+                    <label class="col-sm-2 col-form-label">服务器</label>
+                    <div class="col-sm-10">
+                      <input type="text" v-model="formData.source.cloudsaver.server" class="form-control" placeholder="资源搜索服务器地址，如 http://172.17.0.1:8008">
+                    </div>
+                  </div>
+                  <div class="form-group row">
+                    <label class="col-sm-2 col-form-label">用户名</label>
+                    <div class="col-sm-10">
+                      <input type="text" v-model="formData.source.cloudsaver.username" class="form-control" placeholder="用户名">
+                    </div>
+                  </div>
+                  <div class="form-group row">
+                    <label class="col-sm-2 col-form-label">密码</label>
+                    <div class="col-sm-10">
+                      <input type="password" v-model="formData.source.cloudsaver.password" class="form-control" placeholder="密码">
+                    </div>
+                  </div>
+                </div>
+                <div class="collapse-toggle" data-toggle="collapse" data-target="#collapse_pansou" aria-expanded="true" aria-controls="collapse_pansou">
+                  <i class="bi bi-caret-right-fill"></i> PanSou
+                  <a class="help-link ml-2" href="https://github.com/fish2018/pansou" target="_blank">?</a>
+                </div>
+                <div class="collapse show ml-3" id="collapse_pansou">
+                  <div class="form-group row">
+                    <label class="col-sm-2 col-form-label">服务器</label>
+                    <div class="col-sm-10">
+                      <input type="text" v-model="formData.source.pansou.server" class="form-control" placeholder="资源搜索服务器地址，如 https://so.252035.xyz">
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <div v-if="activeTab === 'tasklist'">
+
+            <!-- Filter Bar -->
+            <div class="filter-bar">
+              <div class="row">
+                <div class="col-lg-4 col-md-12 mb-2">
+                  <label>名称筛选</label>
+                  <div class="input-group">
+                    <input type="text" class="form-control" v-model="taskNameFilter" placeholder="名称 筛选/搜索">
+                    <div class="input-group-append">
+                      <button type="button" class="btn btn-outline-secondary btn-sm" @click="clearData('taskNameFilter')"><i class="bi bi-x-lg"></i></button>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-lg-4 col-md-12 mb-2">
+                  <label>路径筛选</label>
+                  <div class="input-group">
+                    <select class="form-control" v-model="taskDirSelected">
+                      <option v-for="(dir, index) in taskDirs" :value="dir" v-html="dir"></option>
+                    </select>
+                    <div class="input-group-append">
+                      <button type="button" class="btn btn-outline-secondary btn-sm" @click="clearData('taskDirSelected')"><i class="bi bi-x-lg"></i></button>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-lg-4 col-md-12 mb-2" v-if="formData.accounts && formData.accounts.length > 0">
+                  <label>账户筛选</label>
+                  <div class="input-group">
+                    <select class="form-control" v-model="taskAccountFilter">
+                      <option value="">全部账户</option>
+                      <option value="__auto__">自动选择</option>
+                      <option v-for="acc in formData.accounts.filter(a => a.enabled)" :key="acc.name" :value="acc.name">
+                        {{ acc.name }} ({{ getDriveTypeLabel(acc.drive_type) }})
+                      </option>
+                    </select>
+                    <div class="input-group-append">
+                      <button type="button" class="btn btn-outline-secondary btn-sm" @click="clearData('taskAccountFilter')"><i class="bi bi-x-lg"></i></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Task Cards -->
+            <div v-for="(task, index) in formData.tasklist" :key="index">
+              <template v-if="filterTask(task)">
+                <div class="task-card">
+                  <div class="task-card-header" data-toggle="collapse" :data-target="'#collapse_'+index" aria-expanded="false" :aria-controls="'collapse_'+index">
+                    <div class="task-info">
+                      <span class="collapse-arrow"><i class="bi bi-caret-right-fill"></i></span>
+                      <span class="task-number">#{{ index+1 }}</span>
+                      <span class="task-name" v-html="task.taskname"></span>
+                      <span v-if="task.account_name" class="badge badge-info" :title="'使用账户: ' + task.account_name">
+                        <i class="bi bi-person-fill"></i> {{ task.account_name }}
+                      </span>
+                      <span v-else-if="formData.accounts && formData.accounts.length > 0" class="badge badge-secondary" title="自动选择账户">
+                        <i class="bi bi-person"></i> 自动
+                      </span>
+                    </div>
+                    <div class="task-actions" @click.stop>
+                      <button type="button" class="btn btn-outline-primary btn-sm" @click="copyTaskToClipboard(index)" title="复制任务参数到粘贴板"><i class="bi bi-clipboard-check-fill"></i></button>
+                      <button class="btn btn-warning btn-sm" v-if="task.shareurl_ban" :title="task.shareurl_ban" disabled><i class="bi bi-exclamation-triangle-fill"></i></button>
+                      <button type="button" class="btn btn-outline-primary btn-sm" @click="runScriptNow(index)" title="运行此任务" v-else><i class="bi bi-play-fill"></i></button>
+                      <button type="button" class="btn btn-outline-danger btn-sm" @click="removeTask(index)" title="删除此任务"><i class="bi bi-trash3-fill"></i></button>
+                    </div>
+                  </div>
+                  <div class="collapse" :id="'collapse_'+index">
+                    <div class="task-card-body">
+                  <div class="alert alert-warning" role="alert" v-if="task.shareurl_ban" v-html="task.shareurl_ban"></div>
+                  <div class="form-group row">
+                    <label class="col-sm-2 col-form-label">任务名称</label>
+                    <div class="col-sm-10">
+                      <div class="input-group">
+                        <input type="text" name="taskname[]" class="form-control" v-model="task.taskname" placeholder="必填" @focus="smart_param.showSuggestions=true;focusTaskname(index, task)" @input="changeTaskname(index, task)">
+                        <div class="dropdown-menu show task-suggestions" v-if="smart_param.showSuggestions && smart_param.taskSuggestions.success && smart_param.index === index">
+                          <div class="dropdown-item text-muted text-center" style="font-size:12px;">{{ smart_param.taskSuggestions.message ? smart_param.taskSuggestions.message : smart_param.taskSuggestions.data.length ? `以下资源来自网络搜索，请自行辨识，如有侵权请联系资源方` : "未搜索到资源" }}</div>
+                          <div v-for="suggestion in smart_param.taskSuggestions.data" :key="suggestion.taskname" class="dropdown-item cursor-pointer" @click.prevent="selectSuggestion(index, suggestion)" style="font-size: 12px;" :title="suggestion.content">
+                            <span v-html="suggestion.verify ? '✅': '❔'"></span> {{ suggestion.taskname }}
+                            <small class="text-muted">
+                              <a :href="suggestion.shareurl" target="_blank" @click.stop>{{ suggestion.shareurl }}</a>
+                            </small>
+                            <span class="badge bg-transparent border border-success text-success">{{ suggestion.source || "网络公开" }}</span>
+                            <span class="badge bg-transparent border border-info text-info">{{ suggestion.channel }}</span>
+                            <span v-if="suggestion.datetime" class="badge bg-transparent border border-dark text-dark">{{ suggestion.datetime }}</span>
+                          </div>
+                        </div>
+                        <div class="input-group-append" title="深度搜索">
+                          <button class="btn btn-primary" type="button" @click="searchSuggestions(index, task.taskname)">
+                            <i v-if="smart_param.isSearching && smart_param.index === index" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></i>
+                            <i v-else class="bi bi-search-heart"></i>
+                          </button>
+                          <div class="input-group-text" title="谷歌搜索">
+                            <a target="_blank" :href="`https://www.google.com/search?q=%22pan.quark.cn/s%22+${task.taskname}`"><i class="bi bi-google"></i></a>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-group row" title="支持子目录链接，Web端打开分享点入目录，复制浏览器的URL即可；支持带提取码链接，说明见Wiki">
+                    <label class="col-sm-2 col-form-label">分享链接</label>
+                    <div class="col-sm-10">
+                      <div class="input-group">
+                        <input type="text" name="shareurl[]" class="form-control" v-model="task.shareurl" placeholder="必填" @blur="changeShareurl(task)">
+                        <div class="input-group-append" v-if="task.shareurl">
+                          <button type="button" class="btn btn-outline-secondary" @click="fileSelect.selectDir=true;fileSelect.switchShare=false;fileSelect.previewRegex=false;fileSelect.sortBy='file_name';fileSelect.sortOrder='desc';showShareSelect(index)" title="选择文件夹"><i class="bi bi-folder"></i></button>
+                          <div class="input-group-text">
+                            <a target="_blank" :href="task.shareurl"><i class="bi bi-box-arrow-up-right"></i></a>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-group row" v-if="formData.accounts && formData.accounts.length > 0" title="选择用于转存的网盘账户，留空则根据分享链接自动选择">
+                    <label class="col-sm-2 col-form-label"><i class="bi bi-person-badge"></i> 使用账户</label>
+                    <div class="col-sm-10">
+                      <div class="input-group">
+                        <div class="input-group-prepend">
+                          <span class="input-group-text" :class="{'bg-info text-white': task.account_name}">
+                            <i :class="task.account_name ? 'bi bi-person-fill' : 'bi bi-person'"></i>
+                          </span>
+                        </div>
+                        <select v-model="task.account_name" class="form-control" :class="{'border-info': task.account_name}">
+                          <option value="">自动选择（根据链接类型）</option>
+                          <option v-for="acc in formData.accounts.filter(a => a.enabled)" :key="acc.name" :value="acc.name">
+                            {{ acc.name }} ({{ getDriveTypeLabel(acc.drive_type) }})
+                          </option>
+                        </select>
+                        <div class="input-group-append" v-if="task.account_name">
+                          <button type="button" class="btn btn-outline-secondary" @click="task.account_name=''" title="清除选择，使用自动选择">
+                            <i class="bi bi-x-lg"></i>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- 没有配置多网盘账户时显示提示 -->
+                  <div class="form-group row" v-else title="配置多网盘账户后可在此选择使用的账户">
+                    <label class="col-sm-2 col-form-label"><i class="bi bi-person-badge"></i> 使用账户</label>
+                    <div class="col-sm-10">
+                      <div class="input-group">
+                        <input type="text" class="form-control" value="默认（使用Cookie配置）" disabled>
+                        <div class="input-group-append">
+                          <button type="button" class="btn btn-outline-primary" @click="changeTab('config')" title="前往配置多网盘账户">
+                            <i class="bi bi-gear"></i> 配置账户
+                          </button>
+                        </div>
+                      </div>
+                      <small class="form-text text-muted">如需使用115网盘等多网盘功能，请先在「系统配置」中添加多网盘账户</small>
+                    </div>
+                  </div>
+                  <div class="form-group row">
+                    <label class="col-sm-2 col-form-label">保存路径</label>
+                    <div class="col-sm-10">
+                      <div class="input-group">
+                        <input type="text" name="savepath[]" class="form-control" v-model="task.savepath" placeholder="必填" @focus="focusTaskname(index, task)">
+                        <div class="input-group-append">
+                          <button class="btn btn-secondary" type="button" v-if="smart_param.savepath && smart_param.index == index && task.savepath != smart_param.origin_savepath" @click="task.savepath = smart_param.origin_savepath"><i class="bi bi-reply"></i></button>
+                          <button class="btn btn-outline-secondary" type="button" @click="fileSelect.sortBy='file_name';fileSelect.sortOrder='asc';showSavepathSelect(index)">选择</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-group row" title="可用作筛选，只转存匹配到的文件名的文件，留空则转存所有文件">
+                    <label class="col-sm-2 col-form-label">保存规则</label>
+                    <div class="col-sm-10">
+                      <div class="input-group">
+                        <div class="input-group-prepend">
+                          <button class="btn btn-outline-secondary" type="button" @click="fileSelect.selectDir=true;fileSelect.switchShare=false;fileSelect.previewRegex=true;fileSelect.sortBy='file_name';fileSelect.sortOrder='asc';showShareSelect(index)" title="预览正则处理效果">正则处理</button>
+                        </div>
+                        <input type="text" name="pattern[]" class="form-control" v-model="task.pattern" placeholder="匹配表达式" list="magicRegex" @dblclick="inputRawMagicRegex(task)" title="双击可将魔法匹配释放为填入原始正则表达式">
+                        <input type="text" name="replace[]" class="form-control" v-model="task.replace" placeholder="替换表达式">
+                        <div class="input-group-append" title="保存时只比较文件名的部分，01.mp4 和 01.mkv 视同为同一文件，不重复转存">
+                          <div class="input-group-text">
+                            <input type="checkbox" v-model="task.ignore_extension">&nbsp;忽略后缀
+                          </div>
+                        </div>
+                      </div>
+                      <datalist id="magicRegex">
+                        <option v-for="(value, key) in formData.magic_regex" :key="key" :value="`${key}`" v-html="`${value.pattern.replace('<', '<\u200B')} → ${value.replace}`"></option>
+                      </datalist>
+                    </div>
+                  </div>
+                  <div class="form-group row" title="只转存修改日期>选中文件的文件，在容量不够或几百集动漫的场景下非常有用">
+                    <label class="col-sm-2 col-form-label">文件起始</label>
+                    <div class="col-sm-10">
+                      <div class="input-group">
+                        <input type="text" class="form-control" placeholder="可选，只转存修改日期>此文件的文件" name="startfid[]" v-model="task.startfid">
+                        <div class="input-group-append" v-if="task.shareurl">
+                          <button class="btn btn-outline-secondary" type="button" @click="fileSelect.selectDir=false;fileSelect.switchShare=false;fileSelect.previewRegex=false;fileSelect.sortBy='updated_at';fileSelect.sortOrder='desc';showShareSelect(index)">选择</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-group row" title="需匹配到各级嵌套目录名才会更新，否则子目录在第一次转存后不会更新。注意：递归模式原理是逐级索引，深层嵌套目录的场景下效率非常低，慎用 .*">
+                    <label class="col-sm-2 col-form-label">更新目录</label>
+                    <div class="col-sm-10">
+                      <div class="input-group">
+                        <input type="text" name="update_subdir[]" class="form-control" v-model="task.update_subdir" placeholder="可选，匹配需更新子目录（含各级嵌套目录）的正则表达式，多项以|分割，如 4k|1080p">
+                        <div class="input-group-append" title="重存模式：删除该目录下所有文件，重新转存，大资源包时推荐使用&#x0A;不勾选为递归模式：递归检查，逐级更新嵌套目录，效率低">
+                          <div class="input-group-text">
+                            <input type="checkbox" v-model="task.update_subdir_resave_mode">&nbsp;重存模式
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-group row">
+                    <label class="col-sm-2 col-form-label">截止日期</label>
+                    <div class="col-sm-10">
+                      <input type="date" name="enddate[]" class="form-control" v-model="task.enddate" placeholder="可选">
+                    </div>
+                  </div>
+                  <div class="form-group row" title="只在勾选的星期时才运行，在某些周更剧的场景下非常有用">
+                    <label class="col-sm-2 col-form-label">运行星期</label>
+                    <div class="col-sm-10 col-form-label">
+                      <div class="form-check form-check-inline" title="也可用作任务总开关">
+                        <input class="form-check-input" type="checkbox" :checked="task.runweek.length === 7" @change="toggleAllWeekdays(task)" :indeterminate.prop="task.runweek.length > 0 && task.runweek.length < 7">
+                        <label class="form-check-label">全选</label>
+                      </div>
+                      <div class="form-check form-check-inline" v-for="(day, index) in weekdays" :key="index">
+                        <input class="form-check-input" type="checkbox" v-model="task.runweek" :value="index+1">
+                        <label class="form-check-label" v-html="day"></label>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-group row" v-if="Object.keys(getAvailablePlugins(formData.plugins)).length" title="单个任务的插件选项，具体键值由插件定义，见Wiki">
+                    <label class="col-sm-2 col-form-label">插件选项</label>
+                    <div class="col-sm-10">
+                      <v-jsoneditor v-model="task.addition" :options="{mode:'tree'}" :plus="false" height="180px"></v-jsoneditor>
+                    </div>
+                  </div>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Add Task Area -->
+            <div class="task-add-area">
+              <div class="btn-group" role="group" aria-label="任务操作">
+                <button type="button" class="btn btn-primary" @click="addTask()"><i class="bi bi-plus"></i> 增加任务</button>
+                <button type="button" class="btn btn-primary" @click="addTaskForClipboard()" title="从粘贴板导入"><i class="bi bi-clipboard-plus"></i></button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Floating Action Bar -->
+          <div class="bottom-buttons">
+            <button class="btn-save" data-toggle="tooltip" data-placement="top" title="保存 CTRL+S" @click="saveConfig()"><i class="bi bi-floppy2-fill"></i></button>
+            <div class="action-separator"></div>
+            <button class="btn-run" data-toggle="tooltip" data-placement="top" title="运行 CTRL+R" @click="runScriptNow()"><i class="bi bi-play-fill"></i></button>
+            <div class="action-separator"></div>
+            <button class="btn-scroll" data-toggle="tooltip" data-placement="top" title="单击回顶，双击到底" @click="scrollToX(0)" @dblclick="scrollToX()"><i class="bi bi-chevron-bar-up"></i></button>
+          </div>
+        </form>
+      </main>
+
+      <!-- Page Footer -->
+      <footer class="page-footer">
+        <p>
+          <a target="_blank" href="https://github.com/ozoo0/cloud-auto-save/wiki"><i class="bi bi-wechat"></i> 使用交流</a>
+          <a href="./static/js/qas.addtask.user.js"><i class="bi bi-cloud-plus-fill"></i> 油猴脚本</a>
+          <a target="_blank" href="https://github.com/ozoo0/cloud-auto-save"><i class="bi bi-github"></i> GitHub</a>
+        </p>
+        <p><span v-html="versionTips"></span></p>
+      </footer>
+    </div>
+
+    <!-- 模态框 运行日志 -->
+    <div class="modal" tabindex="-1" id="logModal">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><b>运行日志</b>
+              <div v-if="modalLoading" class="spinner-border spinner-border-sm m-1" role="status"></div>
+            </h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body">
+            <pre v-html="run_log"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 文件选择 -->
+    <div class="modal" tabindex="-1" id="fileSelectModal">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">
+              <b v-if="fileSelect.previewRegex">正则处理预览</b>
+              <b v-else-if="fileSelect.selectDir">选择{{fileSelect.selectShare ? '需转存的' : '保存到的'}}文件夹</b>
+              <b v-else>选择起始文件</b>
+              <div v-if="modalLoading" class="spinner-border spinner-border-sm m-1" role="status"></div>
+            </h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body small">
+            <!-- 分享链接来源 -->
+            <div class="mb-3 row" v-if="fileSelect.switchShare">
+              <div class="col-sm-8">
+                <div>
+                  <b>名称：</b>
+                  <span :title="fileSelect.share.content">{{ fileSelect.share.taskname }}</span>
+                </div>
+                <div>
+                  <b>链接：</b>
+                  <a :href="fileSelect.share.shareurl" target="_blank" @click.stop>{{ fileSelect.share.shareurl }}</a>
+                </div>
+                <div>
+                  <b>来源：</b>
+                  <span class="badge bg-transparent border border-success text-success">{{ fileSelect.share.source || "网络公开" }}</span>
+                  <span class="badge bg-transparent border border-info text-info" v-if="fileSelect.share.channel">{{ fileSelect.share.channel }}</span>
+                </div>
+                <div v-if="fileSelect.share.datetime">
+                  <b>时间：</b>
+                  <span>{{ fileSelect.share.datetime }}</span>
+                </div>
+              </div>
+              <div class="col-sm-4 text-right">
+                <div class="btn-group" title="资源搜索结果切换">
+                  <button type="button" class="btn btn-sm btn-outline-primary" @click="switchShare(-1)">上一个</button>
+                  <button type="button" class="btn btn-sm btn-outline-primary" @click="switchShare(1)">下一个</button>
+                </div>
+              </div>
+            </div>
+            <div class="alert alert-warning" v-if="fileSelect.error" v-html="fileSelect.error"></div>
+            <div v-else>
+              <!-- 正则处理表达式 -->
+              <div class="mb-3" v-if="fileSelect.previewRegex && fileSelect.index<this.formData.tasklist.length">
+                <div><b>匹配表达式：</b><span class="badge badge-info" v-html="formData.tasklist[fileSelect.index].pattern"></span>
+                  <span class="badge badge-info" v-if="formData.tasklist[fileSelect.index].pattern in formData.magic_regex">{{ formData.magic_regex[formData.tasklist[fileSelect.index].pattern].pattern }}</span>
+                </div>
+                <div><b>替换表达式：</b><span class="badge badge-info" v-if="formData.tasklist[fileSelect.index].replace" v-html="formData.tasklist[fileSelect.index].replace"></span>
+                  <span class="badge badge-info" v-else-if="formData.tasklist[fileSelect.index].pattern in formData.magic_regex">{{ formData.magic_regex[formData.tasklist[fileSelect.index].pattern].replace }}</span>
+                </div>
+              </div>
+              <!-- 面包屑导航 -->
+              <nav aria-label="breadcrumb" v-if="fileSelect.selectDir">
+                <ol class="breadcrumb">
+                  <li class="breadcrumb-item cursor-pointer" @click="navigateTo('0','/')"><i class="bi bi-house-door"></i></li>
+                  <li v-for="(item, index) in fileSelect.paths" class="breadcrumb-item">
+                    <a v-if="index != fileSelect.paths.length - 1" href="#" @click="navigateTo(item.fid, item.name)">{{ item.name }}</a>
+                    <span v-else class="text-muted">{{ item.name }}</span>
+                  </li>
+                </ol>
+              </nav>
+              <!-- 文件列表 -->
+              <table class="table table-hover table-sm">
+                <thead>
+                  <tr>
+                    <th scope="col" class="cursor-pointer" @click="sortFileList('file_name')">
+                      文件名
+                      <span v-if="fileSelect.sortBy === 'file_name'">{{ fileSelect.sortOrder === "asc" ? "↑" : "↓" }}</span>
+                    </th>
+                    <th scope="col" v-if="fileSelect.selectShare">
+                      正则处理
+                    </th>
+                    <template v-if="!fileSelect.previewRegex">
+                      <th scope="col">
+                        大小
+                      </th>
+                      <th scope="col" class="cursor-pointer" @click="sortFileList('updated_at')">
+                        修改日期
+                        <span v-if="fileSelect.sortBy === 'updated_at'">{{ fileSelect.sortOrder === "asc" ? "↑" : "↓" }}</span>
+                      </th>
+                      <th scope="col" v-if="!fileSelect.selectShare">
+                        操作
+                      </th>
+                    </template>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(file, key) in fileSelect.fileList" :key="key" @click="fileSelect.selectDir ? (file.dir ? navigateTo(file.fid, file.file_name) : null) : selectStartFid(file.fid)" :class="{'cursor-pointer': fileSelect.selectDir ? file.dir : true}">
+                    <td><i class="bi mr-1" :class="file.dir ? 'bi-folder-fill text-warning' : 'bi-file-earmark'"></i>{{file.file_name}}</td>
+                    <td v-if="fileSelect.selectShare" :class="file.file_name_re ? 'text-success' : file.file_name_saved ? 'text-muted' : 'text-danger'">{{file.file_name_re || file.file_name_saved || '&times;'}}</td>
+                    <template v-if="!fileSelect.previewRegex">
+                      <td v-if="file.dir">{{ file.include_items }}项</td>
+                      <td v-else>{{file.size | size}}</td>
+                      <td>{{file.updated_at | ts2date}}</td>
+                      <td v-if="!fileSelect.selectShare"><a class="cursor-pointer text-muted" @click.stop.prevent="deleteFile(file.fid, file.file_name, file.dir)">删除</a></td>
+                    </template>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="modal-footer" v-if="fileSelect.selectDir && !fileSelect.previewRegex">
+            <span v-html="fileSelect.selectShare ? '转存：' : '保存到：'"></span>
+            <button type="button" class="btn btn-primary btn-sm" @click="selectCurrentFolder()">当前文件夹</button>
+            <button type="button" class="btn btn-primary btn-sm" v-if="!fileSelect.selectShare" @click="selectCurrentFolder(true)">当前文件夹<span class="badge badge-light" v-if="fileSelect.index<this.formData.tasklist.length" v-html="'/'+formData.tasklist[fileSelect.index].taskname"></span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 阿里云盘二维码登录 -->
+    <div class="modal" tabindex="-1" id="aliyunQrcodeModal">
+      <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">
+              <i class="bi bi-cloud-arrow-up"></i> 阿里云盘扫码登录
+            </h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close" @click="stopAliyunQrcodePolling">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body text-center">
+            <div v-if="aliyunQrcode.loading" class="py-4">
+              <div class="spinner-border text-primary" role="status"></div>
+              <p class="mt-2">正在生成二维码...</p>
+            </div>
+            <div v-else-if="aliyunQrcode.error" class="alert alert-danger">
+              {{ aliyunQrcode.error }}
+              <button class="btn btn-sm btn-outline-primary mt-2" @click="generateAliyunQrcode">重新生成</button>
+            </div>
+            <div v-else>
+              <img :src="aliyunQrcode.qrCodeUrl" alt="扫码登录" style="width: 200px; height: 200px;" v-if="aliyunQrcode.qrCodeUrl">
+              <p class="mt-2 mb-1">
+                <span v-if="aliyunQrcode.status === 'NEW'" class="text-muted">请使用阿里云盘 App 扫码</span>
+                <span v-else-if="aliyunQrcode.status === 'SCANED'" class="text-info"><i class="bi bi-check-circle"></i> 已扫码，请在手机上确认</span>
+                <span v-else-if="aliyunQrcode.status === 'CONFIRMED'" class="text-success"><i class="bi bi-check-circle-fill"></i> 登录成功！</span>
+                <span v-else-if="aliyunQrcode.status === 'EXPIRED'" class="text-warning"><i class="bi bi-exclamation-triangle"></i> 二维码已过期</span>
+                <span v-else-if="aliyunQrcode.status === 'CANCELED'" class="text-danger"><i class="bi bi-x-circle"></i> 已取消</span>
+                <span v-else class="text-muted">{{ aliyunQrcode.statusMessage }}</span>
+              </p>
+              <button v-if="aliyunQrcode.status === 'EXPIRED' || aliyunQrcode.status === 'CANCELED'" class="btn btn-sm btn-outline-primary" @click="generateAliyunQrcode">刷新二维码</button>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <small class="text-muted">扫码后 refresh_token 将自动填入</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 手动修改 Token -->
+    <div class="modal" tabindex="-1" id="manualTokenModal">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">
+              <i class="bi bi-pencil-square"></i> 手动修改 Token
+            </h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body">
+            <p class="text-muted mb-2" style="font-size: 13px;">
+              请粘贴新的 <b v-text="manualTokenEdit.driveType === 'aliyun' ? 'refresh_token' : 'refresh_token'"></b>，保存后将立即生效。
+            </p>
+            <textarea v-model="manualTokenEdit.newToken" class="form-control" rows="4" placeholder="请粘贴新的 Token 值"></textarea>
+            <div v-if="manualTokenEdit.currentMasked" class="mt-2" style="font-size: 12px;">
+              <span class="text-muted">当前 Token：</span>
+              <code v-text="manualTokenEdit.currentMasked"></code>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary btn-sm" @click="saveManualToken" :disabled="!manualTokenEdit.newToken || manualTokenEdit.saving">
+              <span v-if="manualTokenEdit.saving"><i class="bi bi-arrow-repeat spin"></i> 保存中...</span>
+              <span v-else>保存</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast 提示 -->
+    <div class="toast-container">
+      <div v-for="toast in toasts" :key="toast.id" class="toast show shadow-sm" :class="toast.type" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-body d-flex align-items-center">
+          <i class="bi mr-2" :class="getToastIcon(toast.type)"></i>
+          <span>{{ toast.message }}</span>
+          <button type="button" class="ml-auto close" @click="removeToast(toast.id)" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <script>
+    var app = new Vue({
+      el: '#app',
+      data: {
+        version: "[[ version ]]",
+        versionTips: "",
+        plugin_flags: "[[ plugin_flags ]]",
+        weekdays: ['周一', '周二', '周三', '周四', '周五', '周六', '周日'],
+        driveTypes: [
+          { value: 'quark', label: '夸克网盘', icon: 'bi-cloud' },
+          { value: '115', label: '115网盘', icon: 'bi-hdd-network' },
+          { value: 'baidu', label: '百度网盘', icon: 'bi-cloud-fill' },
+          { value: 'xunlei', label: '迅雷网盘', icon: 'bi-lightning-fill' },
+          { value: 'aliyun', label: '阿里云盘', icon: 'bi-cloud-arrow-up' },
+          { value: 'uc', label: 'UC网盘', icon: 'bi-folder' }
+        ],
+        formData: {
+          cookie: [],
+          accounts: [],  // 多网盘账户配置
+          push_config: {},
+          media_servers: {},
+          tasklist: [],
+          magic_regex: {},
+          source: {
+            net: {
+              enable: ""
+            },
+            cloudsaver: {
+              server: "",
+              username: "",
+              password: "",
+              token: ""
+            },
+            pansou: {
+              server: ""
+            }
+          },
+        },
+        toasts: [],
+        newTask: {
+          taskname: "",
+          shareurl: "",
+          savepath: "/",
+          pattern: "",
+          replace: "",
+          enddate: "",
+          addition: {},
+          ignore_extension: false,
+          runweek: [1, 2, 3, 4, 5, 6, 7],
+          account_name: ""  // 指定使用的账户
+        },
+        newAccount: {
+          name: "",
+          drive_type: "quark",
+          cookie: "",
+          enabled: true,
+          default: false
+        },
+        run_log: "",
+        taskDirs: [""],
+        taskDirSelected: "",
+        taskNameFilter: "",
+        taskAccountFilter: "",  // 按账户筛选任务
+        modalLoading: false,
+        smart_param: {
+          index: null,
+          savepath: "",
+          origin_savepath: "",
+          taskSuggestions: {},
+          showSuggestions: false,
+          isSearching: false,
+          searchTimer: null,
+        },
+        activeTab: 'tasklist',
+        configModified: false,
+        fileSelect: {
+          index: null,
+          share: {},
+          shareurl: "",
+          stoken: "",
+          fileList: [],
+          paths: [],
+          selectDir: true,
+          selectShare: true,
+          switchShare: false,
+          previewRegex: false,
+          sortBy: "updated_at",
+          sortOrder: "desc",
+          driveType: "quark",       // 当前显示的网盘类型
+          tempAccountName: null,    // 临时账户名称（从URL自动检测）
+          error: undefined          // 错误信息
+        },
+        // 阿里云盘二维码登录
+        aliyunQrcode: {
+          loading: false,
+          error: null,
+          accountIndex: null,
+          t: "",
+          ck: "",
+          qrCodeUrl: "",
+          status: "",
+          statusMessage: "",
+          pollingTimer: null
+        },
+        // Token 刷新状态（按账户索引）
+        tokenRefreshing: {},
+        // 手动修改 Token 弹窗数据
+        manualTokenEdit: {
+          accountIndex: null,
+          driveType: '',
+          accountName: '',
+          newToken: '',
+          currentMasked: '',
+          saving: false,
+        },
+      },
+      filters: {
+        ts2date: function (value) {
+          const date = new Date(value);
+          return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()} ${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+        },
+        size: function (value) {
+          if (!value) return "";
+          const unitArr = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+          const srcsize = parseFloat(value);
+          const index = srcsize ? Math.floor(Math.log(srcsize) / Math.log(1024)) : 0;
+          const size = (srcsize / Math.pow(1024, index)).toFixed(1).replace(/\.?0+$/, "");
+          return size + unitArr[index];
+        }
+      },
+      watch: {
+        formData: {
+          handler(newVal, oldVal) {
+            this.configModified = true;
+          },
+          deep: true
+        }
+      },
+      mounted() {
+        this.fetchData();
+        this.checkNewVersion();
+        $('[data-toggle="tooltip"]').tooltip();
+        document.addEventListener('keydown', this.handleKeyDown);
+        document.addEventListener('click', (e) => {
+          if (!e.target.closest('.input-group')) {
+            this.smart_param.showSuggestions = false;
+          }
+        });
+        window.addEventListener('beforeunload', this.handleBeforeUnload);
+      },
+      beforeDestroy() {
+        window.removeEventListener('beforeunload', this.handleBeforeUnload);
+      },
+      methods: {
+        // 检查账户是否为受保护的 token 类型（阿里云盘/迅雷网盘且已填写 cookie）
+        isTokenProtectedAccount(account) {
+          return (account.drive_type === 'aliyun' || account.drive_type === 'xunlei') && account.cookie;
+        },
+        // 刷新 Token
+        refreshToken(index, driveType) {
+          const account = this.formData.accounts[index];
+          if (!account || !account.cookie) {
+            this.showToast('请先填写 refresh_token', 'warning');
+            return;
+          }
+          
+          this.$set(this.tokenRefreshing, index, true);
+          const endpoint = driveType === 'aliyun' ? '/aliyun/token/refresh' : '/xunlei/token/refresh';
+          
+          axios.post(endpoint, { account_name: account.name })
+            .then(response => {
+              if (response.data.success) {
+                const data = response.data.data;
+                // 更新本地的 cookie（虽然后端已经更新了，但保持前端显示同步）
+                if (data.refresh_token) {
+                  account.cookie = data.refresh_token;
+                }
+                const userInfo = data.user_info;
+                const nickname = userInfo?.nickname || userInfo?.user_name || userInfo?.userName || '未知';
+                this.showToast(`Token 刷新成功，用户: ${nickname}`, 'success');
+              } else {
+                this.showToast('Token 刷新失败: ' + (response.data.message || '未知错误'), 'error');
+              }
+            })
+            .catch(error => {
+              console.error('Token refresh error:', error);
+              this.showToast('Token 刷新失败，请检查网络连接', 'error');
+            })
+            .finally(() => {
+              this.$set(this.tokenRefreshing, index, false);
+            });
+        },
+        // 显示手动修改 Token 弹窗
+        showManualTokenEdit(index) {
+          const account = this.formData.accounts[index];
+          if (!account) return;
+          this.manualTokenEdit.accountIndex = index;
+          this.manualTokenEdit.driveType = account.drive_type;
+          this.manualTokenEdit.accountName = account.name;
+          this.manualTokenEdit.newToken = '';
+          this.manualTokenEdit.saving = false;
+          // 显示当前 token 的脱敏值
+          const cookie = account.cookie || '';
+          if (cookie.length > 10) {
+            this.manualTokenEdit.currentMasked = cookie.substring(0, 6) + '****' + cookie.substring(cookie.length - 4);
+          } else {
+            this.manualTokenEdit.currentMasked = cookie ? '****' : '（未设置）';
+          }
+          $('#manualTokenModal').modal('show');
+        },
+        // 保存手动修改的 Token
+        saveManualToken() {
+          const newToken = this.manualTokenEdit.newToken.trim();
+          if (!newToken) {
+            this.showToast('请输入新的 Token', 'warning');
+            return;
+          }
+          this.manualTokenEdit.saving = true;
+          axios.post('/account/update_token', {
+            account_name: this.manualTokenEdit.accountName,
+            drive_type: this.manualTokenEdit.driveType,
+            new_token: newToken,
+          }).then(response => {
+            if (response.data.success) {
+              // 更新前端数据
+              const idx = this.manualTokenEdit.accountIndex;
+              if (idx !== null && this.formData.accounts[idx]) {
+                this.formData.accounts[idx].cookie = newToken;
+              }
+              this.showToast('Token 更新成功', 'success');
+              $('#manualTokenModal').modal('hide');
+            } else {
+              this.showToast('Token 更新失败: ' + (response.data.message || '未知错误'), 'error');
+            }
+          }).catch(error => {
+            console.error('Manual token update error:', error);
+            this.showToast('Token 更新失败，请检查网络连接', 'error');
+          }).finally(() => {
+            this.manualTokenEdit.saving = false;
+          });
+        },
+        changeTab(tab) {
+          this.activeTab = tab;
+        },
+        checkNewVersion() {
+          this.versionTips = this.version;
+          axios.get('https://api.github.com/repos/ozoo0/cloud-auto-save/tags')
+            .then(response => {
+              latestVersion = response.data[0].name;
+              console.log(`检查版本：当前 ${this.version} 最新 ${latestVersion}`);
+              if (latestVersion != this.version) {
+                this.versionTips += ` <sup><span class="position-absolute badge badge-pill badge-danger">${latestVersion}</span></sup>`;
+              }
+            })
+            .catch(error => {
+              console.error('Error:', error);
+            });
+        },
+        fetchData() {
+          axios.get('/data')
+            .then(response => {
+              config_data = response.data.data
+              // cookie兼容
+              if (typeof config_data.cookie === 'string')
+                config_data.cookie = [config_data.cookie];
+              // 添加星期预设
+              config_data.tasklist = config_data.tasklist.map(task => {
+                if (!task.hasOwnProperty('runweek')) {
+                  task.runweek = [1, 2, 3, 4, 5, 6, 7];
+                }
+                return task;
+              });
+              // 获取所有任务父目录
+              config_data.tasklist.forEach(item => {
+                parentDir = this.getParentDirectory(item.savepath)
+                if (!this.taskDirs.includes(parentDir))
+                  this.taskDirs.push(parentDir);
+              });
+              this.newTask.addition = config_data.task_plugins_config_default;
+              // 确保source配置存在
+              if (!config_data.source) {
+                config_data.source = {};
+              }
+              if (!config_data.source.cloudsaver) {
+                config_data.source.cloudsaver = {
+                  server: "",
+                  username: "",
+                  password: "",
+                  token: ""
+                };
+              }
+              if (!config_data.source.pansou) {
+                config_data.source.pansou = {
+                  server: ""
+                };
+              }
+              if (!config_data.source.net) {
+                config_data.source.net = {
+                  enable: ""
+                };
+              }
+              // 确保accounts配置存在
+              if (!config_data.accounts) {
+                config_data.accounts = [];
+              }
+              // 确保任务有account_name字段
+              config_data.tasklist = config_data.tasklist.map(task => {
+                if (!task.hasOwnProperty('account_name')) {
+                  task.account_name = "";
+                }
+                return task;
+              });
+              this.formData = config_data;
+              setTimeout(() => {
+                this.configModified = false;
+              }, 100);
+            })
+            .catch(error => {
+              console.error('Error fetching data:', error);
+            });
+        },
+        handleKeyDown(event) {
+          if (event.ctrlKey || event.metaKey) {
+            if (event.keyCode === 83 || event.key === 's') {
+              event.preventDefault();
+              this.saveConfig();
+            } else if (event.keyCode === 82 || event.key === 'r') {
+              event.preventDefault();
+              this.runScriptNow();
+            }
+          }
+        },
+        handleBeforeUnload(e) {
+          if (this.configModified) {
+            e.preventDefault();
+            e.returnValue = '配置已修改但未保存，确定要离开吗？';
+            return e.returnValue;
+          }
+        },
+        async saveConfig() {
+          // 保存配置
+          axios.post('/update', this.formData)
+            .then(response => {
+              if (response.data.success) {
+                this.configModified = false;
+                this.showToast(response.data.message, 'success');
+              } else {
+                this.showToast(response.data.message, 'error');
+              }
+              console.log('Config saved result:', response.data);
+            })
+            .catch(error => {
+              console.error('Error saving config:', error);
+            });
+        },
+        addCookie() {
+          this.formData.cookie.push("");
+        },
+        removeCookie(index) {
+          if (this.formData.cookie[index] == "" || confirm("确认删除吗？"))
+            this.formData.cookie.splice(index, 1);
+        },
+        // 多网盘账户管理方法
+        addAccount() {
+          if (!this.formData.accounts) {
+            this.$set(this.formData, 'accounts', []);
+          }
+          const newAcc = {
+            name: `账户${this.formData.accounts.length + 1}`,
+            drive_type: 'quark',
+            cookie: '',
+            enabled: true,
+            default: this.formData.accounts.length === 0
+          };
+          this.formData.accounts.push(newAcc);
+        },
+        removeAccount(index) {
+          if (confirm("确认删除此账户吗？")) {
+            const wasDefault = this.formData.accounts[index].default;
+            this.formData.accounts.splice(index, 1);
+            // 如果删除的是默认账户，将第一个设为默认
+            if (wasDefault && this.formData.accounts.length > 0) {
+              this.formData.accounts[0].default = true;
+            }
+          }
+        },
+        setDefaultAccount(index) {
+          this.formData.accounts.forEach((acc, i) => {
+            acc.default = (i === index);
+          });
+        },
+        // 记住账户原名称，用于修改时同步更新任务
+        rememberAccountName(index, name) {
+          this._oldAccountName = name;
+        },
+        // 更新所有引用旧账户名的任务
+        updateTasksAccountName(index, newName) {
+          const oldName = this._oldAccountName;
+          if (oldName && oldName !== newName && newName) {
+            // 更新所有引用旧名称的任务
+            let updatedCount = 0;
+            this.formData.tasklist.forEach(task => {
+              if (task.account_name === oldName) {
+                task.account_name = newName;
+                updatedCount++;
+              }
+            });
+            if (updatedCount > 0) {
+              console.log(`已更新 ${updatedCount} 个任务的账户关联：${oldName} -> ${newName}`);
+            }
+          }
+          this._oldAccountName = null;
+        },
+        getDriveTypeLabel(driveType) {
+          const dt = this.driveTypes.find(d => d.value === driveType);
+          return dt ? dt.label : driveType;
+        },
+        testPush() {
+          this.runScriptNow(1, true);
+        },
+        addPush() {
+          key = prompt("增加的键名", "");
+          if (key != "" && key != null)
+            this.$set(this.formData.push_config, key, "");
+        },
+        removePush(key) {
+          if (confirm("确认删除吗？"))
+            this.$delete(this.formData.push_config, key);
+        },
+        addTask() {
+          newTask = { ...this.newTask }
+          newTask.taskname = this.taskNameFilter;
+          if (this.formData.tasklist.length > 0) {
+            lastTask = this.formData.tasklist[this.formData.tasklist.length - 1];
+            if (this.taskDirSelected) {
+              newTask.savepath = this.taskDirSelected + '/TASKNAME';
+            } else {
+              if (newTask.taskname) {
+                newTask.savepath = lastTask.savepath.replace(lastTask.taskname, newTask.taskname);
+              } else {
+                newTask.savepath = lastTask.taskname ? lastTask.savepath.replace(lastTask.taskname, 'TASKNAME') : lastTask.savepath;
+              }
+            }
+          }
+          this.formData.tasklist.push(newTask);
+          // 滚到最下
+          setTimeout(() => {
+            $('#collapse_' + (this.formData.tasklist.length - 1)).collapse('show').on('shown.bs.collapse', () => {
+              this.scrollToX();
+            });
+          }, 1);
+        },
+        focusTaskname(index, task) {
+          this.smart_param.index = index
+          this.smart_param.origin_savepath = task.savepath
+          regex = new RegExp(`/${task.taskname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(/|$)`)
+          if (task.savepath.includes('TASKNAME')) {
+            this.smart_param.savepath = task.savepath;
+          } else if (task.savepath.match(regex)) {
+            this.smart_param.savepath = task.savepath.replace(task.taskname, 'TASKNAME');
+          } else {
+            this.smart_param.savepath = undefined;
+          }
+        },
+        changeTaskname(index, task) {
+          if (this.smart_param.searchTimer) {
+            clearTimeout(this.smart_param.searchTimer);
+          }
+          this.smart_param.searchTimer = setTimeout(() => {
+            this.searchSuggestions(index, task.taskname, 0);
+          }, 1000);
+          if (this.smart_param.savepath)
+            task.savepath = this.smart_param.savepath.replace('TASKNAME', task.taskname);
+        },
+        removeTask(index) {
+          if (confirm("确认删除任务 [#" + (index + 1) + ": " + this.formData.tasklist[index].taskname + "] 吗？"))
+            this.formData.tasklist.splice(index, 1);
+        },
+        changeShareurl(task) {
+          if (!task.shareurl)
+            return;
+          this.$set(task, "shareurl_ban", undefined);
+          // 从URL中提取任务名
+          try {
+            const matches = decodeURIComponent(task.shareurl).match(/\/(\w{32})-([^\/]+)$/);
+            if (matches) {
+              task.taskname = task.taskname == "" ? matches[2] : task.taskname;
+              task.savepath = task.savepath.replace(/TASKNAME/g, matches[2]);
+            }
+          } catch (e) {
+            console.error("Error decodeURIComponent:", e);
+          }
+          // 从分享中提取任务名
+          axios.post('/get_share_detail', {
+            shareurl: task.shareurl
+          }).then(response => {
+            share_detail = response.data.data
+            if (!response.data.success) {
+              if (share_detail.error.includes("提取码")) {
+                const passcode = prompt("检查失败[" + share_detail.error + "]，请输入提取码：");
+                if (passcode != null) {
+                  task.shareurl = task.shareurl.replace(/pan.quark.cn\/s\/(\w+)(\?pwd=\w*)*/, `pan.quark.cn/s/$1?pwd=${passcode}`);
+                  this.changeShareurl(task);
+                  return;
+                }
+              }
+              this.$set(task, "shareurl_ban", share_detail.error);
+            } else {
+              task.taskname = task.taskname == "" ? share_detail.share.title : task.taskname;
+              task.savepath = task.savepath.replace(/TASKNAME/g, share_detail.share.title);
+              this.$set(task, "shareurl_ban", undefined);
+            }
+          }).catch(error => {
+            console.error('Error get_share_detail:', error);
+          });
+        },
+        clearData(target) {
+          this[target] = "";
+        },
+        async runScriptNow(task_index = null, test = false) {
+          body = {};
+          if (test) {
+            body = {
+              "quark_test": true,
+              "cookie": this.formData.cookie,
+              "push_config": this.formData.push_config
+            };
+          } else if (task_index != null) {
+            task = { ...this.formData.tasklist[task_index] };
+            delete task.runweek;
+            delete task.enddate;
+            body = {
+              "tasklist": [task]
+            };
+          } else if (this.configModified) {
+            if (!confirm('配置已修改但未保存，是否继续运行？')) {
+              return;
+            }
+          }
+          $('#logModal').modal('toggle');
+          this.modalLoading = true;
+          this.run_log = '';
+          try {
+            // 1. 发送 POST 请求
+            const response = await fetch(`/run_script_now`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(body)
+            });
+            if (!response.ok) {
+              throw new Error(`HTTP error! Status: ${response.status}`);
+            }
+            // 2. 处理 SSE 流
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let partialData = '';
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                break;
+              }
+              partialData += decoder.decode(value);
+              const lines = partialData.split('\n').filter(line => line.trim() !== '');
+              for (const line of lines) {
+                if (line.startsWith('data:')) {
+                  const eventData = line.substring(5).trim();
+                  if (eventData === '[DONE]') {
+                    this.modalLoading = false;
+                    if (task_index == null) {
+                      this.fetchData();
+                    }
+                    break;
+                  }
+                  this.run_log += eventData.replace('<', '<\u200B') + '\n';
+                  // 在更新 run_log 后将滚动条滚动到底部
+                  this.$nextTick(() => {
+                    const modalBody = document.querySelector('.modal-body');
+                    modalBody.scrollTop = modalBody.scrollHeight;
+                  });
+                } else {
+                  console.warn('Unexpected line:', line);
+                }
+              }
+              partialData = '';
+            }
+          } catch (error) {
+            this.modalLoading = false;
+            console.error('Error:', error);
+          }
+        },
+        getParentDirectory(path) {
+          parentDir = path.substring(0, path.lastIndexOf('/'))
+          if (parentDir == "")
+            parentDir = "/"
+          return parentDir;
+        },
+        // 综合筛选任务：名称、路径、账户
+        filterTask(task) {
+          // 名称筛选
+          if (this.taskNameFilter && !task.taskname.includes(this.taskNameFilter)) {
+            return false;
+          }
+          // 路径筛选
+          if (this.taskDirSelected && this.getParentDirectory(task.savepath) != this.taskDirSelected) {
+            return false;
+          }
+          // 账户筛选
+          if (this.taskAccountFilter) {
+            if (this.taskAccountFilter === '__auto__') {
+              // 筛选自动选择的任务（account_name 为空）
+              if (task.account_name && task.account_name !== '') {
+                return false;
+              }
+            } else {
+              // 筛选指定账户的任务
+              if (task.account_name !== this.taskAccountFilter) {
+                return false;
+              }
+            }
+          }
+          return true;
+        },
+        scrollToX(top = undefined) {
+          if (top == undefined)
+            top = document.documentElement.scrollHeight
+          window.scrollTo({
+            top: top,
+            behavior: "smooth"
+          });
+        },
+        getAvailablePlugins(plugins) {
+          availablePlugins = {};
+          const pluginsFlagsArray = this.plugin_flags.split(',');
+          for (const pluginName in plugins) {
+            if (!pluginsFlagsArray.includes(`-${pluginName}`)) {
+              availablePlugins[pluginName] = plugins[pluginName];
+            }
+          }
+          return availablePlugins;
+        },
+        toggleAllWeekdays(task) {
+          if (task.runweek.length === 7) {
+            task.runweek = [];
+          } else {
+            task.runweek = [1, 2, 3, 4, 5, 6, 7];
+          }
+        },
+        searchSuggestions(index, taskname, deep = 1) {
+          taskname = taskname.replace(/\((19|20)\d{2}\)/g, '').trim();
+          if (taskname.length < 2) {
+            console.log(`任务名[${taskname}]过短${taskname.length} 不进行搜索`);
+            return;
+          }
+          this.smart_param.isSearching = true;
+          this.smart_param.index = index;
+          try {
+            axios.get('/task_suggestions', {
+              params: {
+                q: taskname,
+                d: deep
+              }
+            }).then(response => {
+              this.smart_param.taskSuggestions = response.data;
+              this.smart_param.showSuggestions = true;
+            }).catch(error => {
+              console.error('Error fetching suggestions:', error);
+            }).finally(() => {
+              this.smart_param.isSearching = false;
+            });
+          } catch (e) {
+            this.smart_param.taskSuggestions = {
+              error: "网络异常"
+            };
+          }
+        },
+        selectSuggestion(index, suggestion) {
+          this.smart_param.showSuggestions = false;
+          this.fileSelect.selectDir = true;
+          this.fileSelect.switchShare = true;
+          this.fileSelect.previewRegex = false;
+          this.fileSelect.share = suggestion;
+          this.showShareSelect(index, suggestion.shareurl);
+        },
+        addMagicRegex() {
+          const newKey = `$MAGIC_${Object.keys(this.formData.magic_regex).length + 1}`;
+          this.$set(this.formData.magic_regex, newKey, { pattern: '', replace: '' });
+        },
+        updateMagicRegexKey(oldKey, newKey) {
+          if (oldKey !== newKey) {
+            if (this.formData.magic_regex[newKey]) {
+              this.showToast(`魔法名 [${newKey}] 已存在，请使用其他名称`, 'warning');
+              return;
+            }
+            this.$set(this.formData.magic_regex, newKey, this.formData.magic_regex[oldKey]);
+            this.$delete(this.formData.magic_regex, oldKey);
+          }
+        },
+        removeMagicRegex(key) {
+          if (confirm(`确认删除魔法匹配规则 [${key}] 吗？`)) {
+            this.$delete(this.formData.magic_regex, key);
+          }
+        },
+        deleteFile(fid, fname, isDir) {
+          if (fid != "" && confirm(`确认删除${isDir ? '目录' : '文件'} [${fname}] 吗？`))
+            axios.post('/delete_file', {
+              fid: fid
+            }).then(response => {
+              if (response.data.code == 0) {
+                this.fileSelect.fileList = this.fileSelect.fileList.filter(item => item.fid != fid);
+              } else {
+                this.showToast('删除失败：' + response.data.message, 'error');
+              }
+            }).catch(error => {
+              console.error('Error /delete_file:', error);
+            });
+        },
+        getSavepathDetail(params = 0) {
+          if (params.includes('/')) {
+            params = { path: params }
+          } else {
+            params = { fid: params }
+          }
+          // 传递当前任务的账户名称，以便后端使用正确的网盘账户
+          if (this.fileSelect.index !== null && this.formData.tasklist[this.fileSelect.index]) {
+            const task = this.formData.tasklist[this.fileSelect.index];
+            // 优先使用任务配置的账户，其次使用临时检测的账户
+            if (task.account_name) {
+              params.account_name = task.account_name;
+            } else if (this.fileSelect.tempAccountName) {
+              params.account_name = this.fileSelect.tempAccountName;
+            }
+          }
+          this.modalLoading = true;
+          axios.get('/get_savepath_detail', {
+            params: params
+          }).then(response => {
+            if (response.data.success) {
+              this.fileSelect.fileList = response.data.data.list;
+              this.sortFileList(this.fileSelect.sortBy, this.fileSelect.sortOrder);
+              if (response.data.data.paths?.length > 0) {
+                this.fileSelect.paths = response.data.data.paths
+              }
+              // 保存当前显示的网盘类型
+              this.fileSelect.driveType = response.data.data.drive_type || 'quark';
+            } else {
+              this.fileSelect.error = response.data.data?.error || "获取文件夹列表失败";
+            }
+            this.modalLoading = false;
+          }).catch(error => {
+            console.error('Error /get_savepath_detail:', error);
+            this.fileSelect.error = "获取文件夹列表失败";
+            this.modalLoading = false;
+          });
+        },
+        showSavepathSelect(index) {
+          this.fileSelect.selectShare = false;
+          this.fileSelect.selectDir = true;
+          this.fileSelect.switchShare = false;
+          this.fileSelect.previewRegex = false;
+          this.fileSelect.error = undefined;
+          this.fileSelect.fileList = [];
+          this.fileSelect.paths = [];
+          this.fileSelect.index = index;
+          
+          const task = this.formData.tasklist[index];
+          // 如果任务没有指定账户，但有分享链接，尝试从链接检测网盘类型并自动选择账户
+          if (!task.account_name && task.shareurl) {
+            const detectedType = this.detectDriveTypeFromUrl(task.shareurl);
+            if (detectedType && this.formData.accounts) {
+              // 查找对应类型的第一个启用账户
+              const matchedAccount = this.formData.accounts.find(
+                acc => acc.enabled && acc.drive_type === detectedType
+              );
+              if (matchedAccount) {
+                // 临时设置账户名用于获取保存路径（不修改任务配置）
+                this.fileSelect.tempAccountName = matchedAccount.name;
+              }
+            }
+          }
+          
+          $('#fileSelectModal').modal('toggle');
+          task.savepath = task.savepath.replace(/\/+/g, "/");
+          this.getSavepathDetail(task.savepath);
+        },
+        // 从URL检测网盘类型
+        detectDriveTypeFromUrl(url) {
+          if (!url) return null;
+          if (/pan\.quark\.cn/.test(url)) return 'quark';
+          if (/(?:115|anxia|115cdn)\.com/.test(url)) return '115';
+          if (/pan\.baidu\.com/.test(url)) return 'baidu';
+          if (/pan\.xunlei\.com/.test(url)) return 'xunlei';
+          if (/(?:alipan|aliyundrive)\.com/.test(url)) return 'aliyun';
+          if (/drive\.uc\.cn/.test(url)) return 'uc';
+          return null;
+        },
+        getShareDetail() {
+          this.modalLoading = true;
+          axios.post('/get_share_detail', {
+            shareurl: this.fileSelect.shareurl,
+            stoken: this.fileSelect.stoken,
+            task: this.formData.tasklist[this.fileSelect.index],
+            magic_regex: this.formData.magic_regex,
+          }).then(response => {
+            if (response.data.success) {
+              this.fileSelect.fileList = response.data.data.list;
+              this.sortFileList(this.fileSelect.sortBy, this.fileSelect.sortOrder);
+              // 使用后端返回的路径（如Quark带完整路径信息）；
+              // 如果后端未返回有效路径（如115），则保留本地维护的路径
+              let backendPaths = response.data.data.paths || [];
+              if (backendPaths.length > 0 && backendPaths.every(p => p.name)) {
+                this.fileSelect.paths = backendPaths;
+              }
+              this.fileSelect.stoken = response.data.data.stoken;
+            } else {
+              this.fileSelect.error = response.data.data.error
+            }
+            this.modalLoading = false;
+          }).catch(error => {
+            console.error('Error getting folders:', error);
+            this.fileSelect.error = "获取文件夹列表失败";
+            this.modalLoading = false;
+          });
+        },
+        showShareSelect(index, shareurl = null) {
+          this.fileSelect.selectShare = true;
+          this.fileSelect.fileList = [];
+          this.fileSelect.paths = [];
+          this.fileSelect.error = undefined;
+          // 如果分享链接发生变化，则重置 stoken
+          const newShareurl = shareurl || this.formData.tasklist[index].shareurl
+          if (this.getShareurl(this.fileSelect.shareurl) != this.getShareurl(newShareurl)) {
+            this.fileSelect.stoken = "";
+          }
+          this.fileSelect.shareurl = newShareurl;
+          this.fileSelect.index = index;
+          $('#fileSelectModal').modal('toggle');
+          this.getShareDetail();
+        },
+        switchShare(index) {
+          currentIndex = this.smart_param.taskSuggestions.data.indexOf(this.fileSelect.share);
+          nextIndex = currentIndex + index;
+          if (nextIndex < 0) {
+            this.showToast("没有上一个啦", "info");
+          } else if (nextIndex >= this.smart_param.taskSuggestions.data.length) {
+            this.showToast("没有下一个啦", "info");
+          } else {
+            this.fileSelect.error = "";
+            this.fileSelect.stoken = "";
+            this.fileSelect.share = this.smart_param.taskSuggestions.data[nextIndex];
+            this.fileSelect.shareurl = this.smart_param.taskSuggestions.data[nextIndex].shareurl;
+            this.fileSelect.paths = [];
+            this.fileSelect.fileList = [];
+            this.getShareDetail();
+          }
+        },
+        navigateTo(fid, name) {
+          dir = { fid: fid, name: name }
+          if (this.fileSelect.selectShare) {
+            // 在本地维护路径面包屑（115等不返回路径信息的网盘需要）
+            if (fid == "0" || fid == 0) {
+              this.fileSelect.paths = [];
+            } else {
+              let pathIdx = this.fileSelect.paths.findIndex(item => item.fid === fid || item.fid == fid);
+              if (pathIdx !== -1) {
+                this.fileSelect.paths = this.fileSelect.paths.slice(0, pathIdx + 1);
+              } else {
+                this.fileSelect.paths.push({ fid: fid, name: name });
+              }
+            }
+            this.fileSelect.shareurl = this.getShareurl(this.fileSelect.shareurl, dir);
+            this.getShareDetail();
+          } else {
+            if (fid == "0") {
+              this.fileSelect.paths = []
+            } else {
+              index = this.fileSelect.paths.findIndex(item => item.fid === fid);
+              if (index !== -1) {
+                this.fileSelect.paths = this.fileSelect.paths.slice(0, index + 1)
+              } else {
+                this.fileSelect.paths.push({ fid: fid, name: name })
+              }
+            }
+            this.getSavepathDetail(fid);
+          }
+        },
+        selectCurrentFolder(addTaskname = false) {
+          if (this.fileSelect.selectShare) {
+            this.formData.tasklist[this.fileSelect.index].shareurl_ban = undefined;
+            this.formData.tasklist[this.fileSelect.index].shareurl = this.fileSelect.shareurl;
+          } else {
+            this.formData.tasklist[this.fileSelect.index].savepath = "/" + this.fileSelect.paths.map(item => item.name).join("/");
+            if (addTaskname) {
+              this.formData.tasklist[this.fileSelect.index].savepath += "/" + this.formData.tasklist[this.fileSelect.index].taskname
+            }
+          }
+          $('#fileSelectModal').modal('hide')
+        },
+        selectStartFid(fid) {
+          Vue.set(this.formData.tasklist[this.fileSelect.index], 'startfid', fid);
+          $('#fileSelectModal').modal('hide')
+        },
+        getShareurl(shareurl, dir = {}) {
+          if (!dir.fid || dir.fid == 0) {
+            // 返回根URL：保留share code + 所有查询参数，去掉 # 及之后的部分
+            // 兼容 Quark (?pwd=xxx) 和 115 (?password=xxx) 两种格式
+            let match = shareurl.match(/.*s\/[a-zA-Z0-9]+(\?[^#]*)?/);
+            shareurl = match ? match[0] : shareurl.split('#')[0];
+          } else if (shareurl.includes(dir.fid)) {
+            shareurl = shareurl.match(`.*/${dir.fid}[^/]*`)[0]
+          } else if (shareurl.includes('#/list/share')) {
+            shareurl = `${shareurl.split('#')[0]}#/list/share/${dir.fid}`
+          } else {
+            shareurl = `${shareurl.split('#')[0]}#/list/share/${dir.fid}`
+          }
+          return shareurl;
+        },
+        sortFileList(column, order) {
+          if (this.fileSelect.sortBy === column && !order) {
+            this.fileSelect.sortOrder = this.fileSelect.sortOrder === "asc" ? "desc" : "asc";
+          } else {
+            this.fileSelect.sortBy = column;
+            this.fileSelect.sortOrder = order || "asc";
+          }
+
+          this.fileSelect.fileList.sort((a, b) => {
+            let valA = a[this.fileSelect.sortBy];
+            let valB = b[this.fileSelect.sortBy];
+
+            if (typeof valA === "string") valA = valA.toLowerCase();
+            if (typeof valB === "string") valB = valB.toLowerCase();
+
+            if (valA < valB) return this.fileSelect.sortOrder === "asc" ? -1 : 1;
+            if (valA > valB) return this.fileSelect.sortOrder === "asc" ? 1 : -1;
+            return 0;
+          });
+        },
+        inputRawMagicRegex(task) {
+          const item = this.formData.magic_regex[task.pattern];
+          if (item) {
+            task.pattern = item.pattern;
+            task.replace = item.replace;
+          }
+        },
+        copyText(text, callback = () => { }) {
+          if (!text) {
+            console.error('No text to copy');
+            return;
+          }
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text);
+          } else {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.top = '0';
+            textarea.style.left = '0';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            textarea.setSelectionRange(0, 99999);
+            document.execCommand("copy");
+            document.body.removeChild(textarea);
+          }
+          callback()
+        },
+        copyTaskToClipboard(index) {
+          const task = { ...this.formData.tasklist[index] };
+          delete task.addition;
+          const _this = this;
+          this.copyText(JSON.stringify(task), function () {
+            _this.showToast("任务参数已复制到剪贴板", "success");
+          });
+        },
+        async addTaskForClipboard() {
+          text = null
+          try {
+            text = await navigator.clipboard.readText();
+          } catch (error) {
+            text = prompt("当前环境不支持自动读取粘贴板，请手动粘贴任务参数", "");
+          }
+          if (text) {
+            try {
+              let task = JSON.parse(text);
+              task = { ...this.newTask, ...task };
+              this.formData.tasklist.push(task);
+              this.showToast("剪贴板参数已成功导入任务", "success");
+              // 滚到最下
+              setTimeout(() => {
+                $('#collapse_' + (this.formData.tasklist.length - 1)).collapse('show').on('shown.bs.collapse', () => {
+                  this.scrollToX();
+                });
+              }, 1);
+            } catch (error) {
+              this.showToast("解析剪贴板内容失败", "error");
+            }
+          }
+        },
+        showToast(message, type = 'info', duration = 3000) {
+          const id = Date.now();
+          this.toasts.push({ id, message, type });
+          setTimeout(() => {
+            this.removeToast(id);
+          }, duration);
+        },
+        removeToast(id) {
+          this.toasts = this.toasts.filter(t => t.id !== id);
+        },
+        getToastIcon(type) {
+          switch (type) {
+            case 'success': return 'bi-check-circle-fill text-success';
+            case 'error': return 'bi-exclamation-circle-fill text-danger';
+            case 'warning': return 'bi-exclamation-triangle-fill text-warning';
+            default: return 'bi-info-circle-fill text-info';
+          }
+        },
+        // 阿里云盘二维码登录相关方法
+        showAliyunQrcode(accountIndex) {
+          this.aliyunQrcode.accountIndex = accountIndex;
+          this.aliyunQrcode.error = null;
+          this.aliyunQrcode.status = "";
+          this.aliyunQrcode.statusMessage = "";
+          $('#aliyunQrcodeModal').modal('show');
+          this.generateAliyunQrcode();
+        },
+        async generateAliyunQrcode() {
+          this.aliyunQrcode.loading = true;
+          this.aliyunQrcode.error = null;
+          this.aliyunQrcode.status = "";
+          try {
+            const response = await axios.get('/aliyun/qrcode/generate');
+            if (response.data.success) {
+              const data = response.data.data;
+              this.aliyunQrcode.t = data.t;
+              this.aliyunQrcode.ck = data.ck;
+              this.aliyunQrcode.qrCodeUrl = data.qrCodeUrl;
+              this.aliyunQrcode.status = "NEW";
+              this.aliyunQrcode.statusMessage = "等待扫码";
+              // 开始轮询二维码状态
+              this.startAliyunQrcodePolling();
+            } else {
+              this.aliyunQrcode.error = response.data.message || "生成二维码失败";
+            }
+          } catch (error) {
+            console.error('Error generating QR code:', error);
+            this.aliyunQrcode.error = "生成二维码失败，请检查网络连接";
+          } finally {
+            this.aliyunQrcode.loading = false;
+          }
+        },
+        startAliyunQrcodePolling() {
+          this.stopAliyunQrcodePolling();
+          this.aliyunQrcode.pollingTimer = setInterval(() => {
+            this.queryAliyunQrcodeStatus();
+          }, 3000);
+        },
+        stopAliyunQrcodePolling() {
+          if (this.aliyunQrcode.pollingTimer) {
+            clearInterval(this.aliyunQrcode.pollingTimer);
+            this.aliyunQrcode.pollingTimer = null;
+          }
+        },
+        async queryAliyunQrcodeStatus() {
+          if (!this.aliyunQrcode.t || !this.aliyunQrcode.ck) return;
+          try {
+            const response = await axios.get('/aliyun/qrcode/query', {
+              params: {
+                t: this.aliyunQrcode.t,
+                ck: this.aliyunQrcode.ck
+              }
+            });
+            if (response.data.success) {
+              const data = response.data.data;
+              this.aliyunQrcode.status = data.status;
+              this.aliyunQrcode.statusMessage = data.message;
+              // 处理不同状态
+              if (data.status === 'CONFIRMED') {
+                this.stopAliyunQrcodePolling();
+                // 登录成功，填入 refresh_token
+                if (data.refresh_token && this.aliyunQrcode.accountIndex !== null) {
+                  this.formData.accounts[this.aliyunQrcode.accountIndex].cookie = data.refresh_token;
+                  this.showToast(`阿里云盘登录成功: ${data.nick_name || data.user_name || ''}`, 'success');
+                  // 延迟关闭模态框
+                  setTimeout(() => {
+                    $('#aliyunQrcodeModal').modal('hide');
+                  }, 1500);
+                }
+              } else if (data.status === 'EXPIRED' || data.status === 'CANCELED') {
+                this.stopAliyunQrcodePolling();
+              }
+            }
+          } catch (error) {
+            console.error('Error querying QR code status:', error);
+          }
+        },
+      }
+    });
+  </script>
+</body>
+
+</html>

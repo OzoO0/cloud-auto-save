@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录</title>
+    <link rel="stylesheet" href="./static/css/bootstrap.min.css">
+    <link rel="stylesheet" href="./static/css/bootstrap-icons.min.css">
+    <style>
+        :root {
+            color-scheme: light dark;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            background-color: #f5f5f7;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            margin: 0;
+        }
+        .login-card {
+            max-width: 400px;
+            width: 100%;
+            margin: 0 auto;
+            background: #ffffff;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.04);
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1px solid rgba(0,0,0,0.06);
+        }
+        .login-header {
+            padding: 2rem 2rem 0.5rem;
+            text-align: center;
+        }
+        .login-header h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            color: #1d1d1f;
+        }
+        .login-header p {
+            color: #6e6e73;
+            font-size: 0.875rem;
+        }
+        .login-body {
+            padding: 1.5rem 2rem 2rem;
+        }
+        .form-label {
+            font-size: 0.8125rem;
+            font-weight: 500;
+            color: #1d1d1f;
+        }
+        .form-control {
+            border-radius: 12px;
+            border: 1.5px solid rgba(0,0,0,0.08);
+            background: #f2f2f7;
+            padding: 10px 14px;
+            font-size: 0.875rem;
+            transition: all 0.15s ease;
+        }
+        .form-control:focus {
+            border-color: #007AFF;
+            box-shadow: 0 0 0 3px rgba(0,122,255,0.15);
+            background: #fff;
+        }
+        .input-group-text {
+            background: #f2f2f7;
+            border: 1.5px solid rgba(0,0,0,0.08);
+            border-right: none;
+            border-radius: 12px 0 0 12px;
+            color: #6e6e73;
+        }
+        .input-group .form-control {
+            border-top-left-radius: 0;
+            border-bottom-left-radius: 0;
+        }
+        .btn {
+            border-radius: 12px;
+            padding: 10px 20px;
+            width: 100%;
+            font-weight: 500;
+            font-size: 0.9375rem;
+        }
+        .btn-primary {
+            background: #007AFF;
+            border: none;
+        }
+        .btn-primary:hover {
+            background: #0066d6;
+        }
+        .alert {
+            border-radius: 12px;
+            font-size: 0.8125rem;
+        }
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #000000;
+            }
+            .login-card {
+                background: #1c1c1e;
+                border-color: rgba(255,255,255,0.08);
+                box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+            }
+            .login-header h1 { color: #f5f5f7; }
+            .login-header p { color: #a1a1a6; }
+            .form-label { color: #f5f5f7; }
+            .form-control {
+                background: #2c2c2e;
+                border-color: rgba(255,255,255,0.08);
+                color: #f5f5f7;
+            }
+            .form-control:focus {
+                background: #1c1c1e;
+                border-color: #0A84FF;
+                box-shadow: 0 0 0 3px rgba(10,132,255,0.2);
+            }
+            .input-group-text {
+                background: #2c2c2e;
+                border-color: rgba(255,255,255,0.08);
+                color: #a1a1a6;
+            }
+            .btn-primary { background: #0A84FF; }
+            .btn-primary:hover { background: #409CFF; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="login-card">
+            <div class="login-header">
+                <h1 class="mb-3">登录</h1>
+                <p class="text-muted">欢迎回来，请登录您的账户</p>
+            </div>
+            <div class="login-body">
+                {% if message %}
+                <div class="alert alert-danger text-center" role="alert">
+                    [[ message ]]
+                </div>
+                {% endif %}
+                <form action="/login" method="POST">
+                    <div class="form-group mb-3">
+                        <label for="username" class="form-label">用户名</label>
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text"><i class="bi bi-person-fill"></i></span>
+                            </div>
+                            <input type="text" class="form-control" id="username" name="username" required>
+                        </div>
+                    </div>
+                    <div class="form-group mb-4">
+                        <label for="password" class="form-label">密码</label>
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text"><i class="bi bi-lock-fill"></i></span>
+                            </div>
+                            <input type="password" class="form-control" id="password" name="password" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">登录</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

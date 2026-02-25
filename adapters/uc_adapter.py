@@ -1,0 +1,421 @@
+# -*- coding: utf-8 -*-
+"""
+UC网盘适配器
+基于夸克网盘适配器模板（同属阿里系，API结构类似）
+"""
+import re
+import time
+import random
+import logging
+import requests
+from typing import Dict, List, Tuple, Optional, Any
+from datetime import datetime
+
+from adapters.base_adapter import BaseCloudDriveAdapter
+
+
+class UCAdapter(BaseCloudDriveAdapter):
+    """UC网盘适配器"""
+
+    DRIVE_TYPE = "uc"
+    
+    # UC 网盘 API 域名
+    BASE_URL = "https://pc-api.uc.cn"
+    BASE_URL_DRIVE = "https://drive.uc.cn"
+    
+    USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+
+    def __init__(self, cookie: str = "", index: int = 0):
+        super().__init__(cookie, index)
+        self._cookies_dict: Dict[str, str] = {}
+        
+        # 解析 cookie
+        if cookie:
+            for item in cookie.split(";"):
+                item = item.strip()
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    self._cookies_dict[k.strip()] = v.strip()
+
+    def _send_request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """发送 HTTP 请求"""
+        headers = {
+            "cookie": self.cookie,
+            "content-type": "application/json",
+            "user-agent": self.USER_AGENT,
+            "origin": self.BASE_URL_DRIVE,
+            "referer": f"{self.BASE_URL_DRIVE}/",
+        }
+        if "headers" in kwargs:
+            headers.update(kwargs["headers"])
+            del kwargs["headers"]
+
+        try:
+            response = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+            return response
+        except Exception as e:
+            logging.error(f"[UC] 请求失败: {e}")
+            fake_response = requests.Response()
+            fake_response.status_code = 500
+            fake_response._content = b'{"status": 500, "code": 1, "message": "request error"}'
+            return fake_response
+
+    def _safe_json(self, response: requests.Response) -> Dict:
+        """安全解析 JSON 响应"""
+        try:
+            return response.json()
+        except Exception as e:
+            logging.warning(f"[UC] JSON解析失败: {e}")
+            return {"code": 1, "status": 500, "message": "响应解析失败"}
+
+    def init(self) -> Any:
+        """初始化账户"""
+        account_info = self.get_account_info()
+        if account_info:
+            self.is_active = True
+            self.nickname = account_info.get("nickname", f"UC用户{self.index}")
+            return account_info
+        return False
+
+    def get_account_info(self) -> Any:
+        """获取账户信息"""
+        # UC 网盘账户信息 API
+        url = f"{self.BASE_URL_DRIVE}/account/info"
+        params = {"pr": "UCBrowser", "fr": "pc"}
+        
+        try:
+            response = self._send_request("GET", url, params=params)
+            data = self._safe_json(response)
+            if data.get("data"):
+                return data["data"]
+        except Exception as e:
+            logging.error(f"[UC] 获取账户信息失败: {e}")
+        
+        return False
+
+    def get_stoken(self, pwd_id: str, passcode: str = "") -> Dict:
+        """获取分享令牌"""
+        url = f"{self.BASE_URL}/1/clouddrive/share/sharepage/token"
+        params = {"pr": "UCBrowser", "fr": "pc"}
+        payload = {"pwd_id": pwd_id, "passcode": passcode}
+
+        try:
+            response = self._send_request("POST", url, json=payload, params=params)
+            result = self._safe_json(response)
+            return result
+        except Exception as e:
+            logging.error(f"[UC] 获取分享令牌失败: {e}")
+            return {"status": 500, "code": 1, "message": f"获取分享令牌失败: {e}"}
+
+    def get_detail(
+        self,
+        pwd_id: str,
+        stoken: str,
+        pdir_fid: str,
+        _fetch_share: int = 0,
+        fetch_share_full_path: int = 0,
+    ) -> Dict:
+        """获取分享文件详情"""
+        list_merge = []
+        page = 1
+
+        while True:
+            url = f"{self.BASE_URL}/1/clouddrive/share/sharepage/detail"
+            params = {
+                "pr": "UCBrowser",
+                "fr": "pc",
+                "pwd_id": pwd_id,
+                "stoken": stoken,
+                "pdir_fid": pdir_fid,
+                "force": "0",
+                "_page": page,
+                "_size": "50",
+                "_fetch_banner": "0",
+                "_fetch_share": _fetch_share,
+                "_fetch_total": "1",
+                "_sort": "file_type:asc,updated_at:desc",
+                "fetch_share_full_path": fetch_share_full_path,
+            }
+
+            try:
+                response = self._send_request("GET", url, params=params)
+                result = self._safe_json(response)
+                
+                if result.get("code") != 0:
+                    return result
+                
+                file_list = result.get("data", {}).get("list", [])
+                if file_list:
+                    list_merge.extend(file_list)
+                    page += 1
+                else:
+                    break
+                
+                total = result.get("metadata", {}).get("_total", 0)
+                if len(list_merge) >= total:
+                    break
+                    
+            except Exception as e:
+                logging.error(f"[UC] 获取分享详情失败: {e}")
+                return {"code": 1, "message": f"获取分享详情失败: {e}", "data": {"list": []}}
+
+        return {
+            "code": 0,
+            "message": "success",
+            "data": {"list": list_merge},
+            "metadata": {"_total": len(list_merge)},
+        }
+
+    def ls_dir(self, pdir_fid: str, **kwargs) -> Dict:
+        """列出目录内容"""
+        list_merge = []
+        page = 1
+
+        while True:
+            url = f"{self.BASE_URL}/1/clouddrive/file/sort"
+            params = {
+                "pr": "UCBrowser",
+                "fr": "pc",
+                "pdir_fid": pdir_fid,
+                "_page": page,
+                "_size": "50",
+                "_fetch_total": "1",
+                "_fetch_sub_dirs": "0",
+                "_sort": "file_type:asc,updated_at:desc",
+                "_fetch_full_path": kwargs.get("fetch_full_path", 0),
+            }
+
+            try:
+                response = self._send_request("GET", url, params=params)
+                result = self._safe_json(response)
+                
+                if result.get("code") != 0:
+                    return result
+                
+                file_list = result.get("data", {}).get("list", [])
+                if file_list:
+                    list_merge.extend(file_list)
+                    page += 1
+                else:
+                    break
+                
+                total = result.get("metadata", {}).get("_total", 0)
+                if len(list_merge) >= total:
+                    break
+                    
+            except Exception as e:
+                logging.error(f"[UC] 列出目录失败: {e}")
+                return {"code": 1, "message": f"列出目录失败: {e}", "data": {"list": []}}
+
+        return {
+            "code": 0,
+            "message": "success",
+            "data": {"list": list_merge},
+            "metadata": {"_total": len(list_merge)},
+        }
+
+    def save_file(
+        self,
+        fid_list: List[str],
+        fid_token_list: List[str],
+        to_pdir_fid: str,
+        pwd_id: str,
+        stoken: str,
+    ) -> Dict:
+        """转存文件"""
+        url = f"{self.BASE_URL}/1/clouddrive/share/sharepage/save"
+        params = {
+            "entry": "update_share",
+            "pr": "UCBrowser",
+            "fr": "pc",
+            "__dt": int(random.uniform(1, 5) * 60 * 1000),
+            "__t": datetime.now().timestamp(),
+        }
+        payload = {
+            "fid_list": fid_list,
+            "fid_token_list": fid_token_list,
+            "to_pdir_fid": to_pdir_fid,
+            "pwd_id": pwd_id,
+            "stoken": stoken,
+            "pdir_fid": "0",
+            "scene": "link",
+        }
+
+        try:
+            response = self._send_request("POST", url, json=payload, params=params)
+            result = self._safe_json(response)
+
+            # 检查容量限制错误
+            msg = result.get("message", "")
+            if "capacity limit" in msg.lower():
+                logging.error("[UC] 网盘容量不足，无法转存")
+                return {"code": 1, "status": 400, "message": "UC网盘容量不足，请清理空间后重试", "data": {}}
+
+            return result
+        except Exception as e:
+            logging.error(f"[UC] 转存失败: {e}")
+            return {"code": 1, "message": f"转存失败: {e}", "data": {}}
+
+    def query_task(self, task_id: str) -> Dict:
+        """查询任务状态"""
+        retry_index = 0
+        max_retries = 60
+        result = {"status": 500, "code": 1, "message": "任务查询超时"}
+
+        while retry_index < max_retries:
+            url = f"{self.BASE_URL}/1/clouddrive/task"
+            params = {
+                "pr": "UCBrowser",
+                "fr": "pc",
+                "task_id": task_id,
+                "retry_index": retry_index,
+                "__dt": int(random.uniform(1, 5) * 60 * 1000),
+                "__t": datetime.now().timestamp(),
+            }
+
+            try:
+                response = self._send_request("GET", url, params=params)
+                result = self._safe_json(response)
+
+                # 检查容量限制错误
+                msg = result.get("message", "")
+                if "capacity limit" in msg.lower():
+                    logging.error("[UC] 网盘容量不足")
+                    return {"status": 400, "code": 1, "message": "UC网盘容量不足，请清理空间后重试", "data": {"status": -1}}
+
+                if result.get("status") != 200:
+                    return result
+
+                task_status = result.get("data", {}).get("status")
+
+                # 任务完成
+                if task_status == 2:
+                    if retry_index > 0:
+                        logging.info("")
+                    break
+
+                # 任务失败
+                if task_status == -1:
+                    msg = result.get("data", {}).get("message", "任务执行失败")
+                    logging.error(f"[UC] 任务失败: {msg}")
+                    return result
+
+                # 任务进行中
+                if retry_index == 0:
+                    task_title = result.get("data", {}).get("task_title", "任务")
+                    logging.info(f"[UC] 等待任务[{task_title}]执行结果...")
+
+                retry_index += 1
+                time.sleep(0.5)
+
+            except Exception as e:
+                logging.error(f"[UC] 查询任务失败: {e}")
+                return {"status": 500, "code": 1, "message": f"查询任务失败: {e}"}
+
+        return result
+
+    def mkdir(self, dir_path: str) -> Dict:
+        """创建目录"""
+        url = f"{self.BASE_URL}/1/clouddrive/file"
+        params = {"pr": "UCBrowser", "fr": "pc"}
+        payload = {
+            "pdir_fid": "0",
+            "file_name": "",
+            "dir_path": dir_path,
+            "dir_init_lock": False,
+        }
+
+        try:
+            response = self._send_request("POST", url, json=payload, params=params)
+            result = self._safe_json(response)
+            return result
+        except Exception as e:
+            logging.error(f"[UC] 创建目录失败: {e}")
+            return {"code": 1, "message": f"创建目录失败: {e}"}
+
+    def rename(self, fid: str, file_name: str) -> Dict:
+        """重命名文件"""
+        url = f"{self.BASE_URL}/1/clouddrive/file/rename"
+        params = {"pr": "UCBrowser", "fr": "pc"}
+        payload = {"fid": fid, "file_name": file_name}
+
+        try:
+            response = self._send_request("POST", url, json=payload, params=params)
+            result = self._safe_json(response)
+            return result
+        except Exception as e:
+            logging.error(f"[UC] 重命名失败: {e}")
+            return {"code": 1, "message": f"重命名失败: {e}"}
+
+    def delete(self, filelist: List[str]) -> Dict:
+        """删除文件"""
+        url = f"{self.BASE_URL}/1/clouddrive/file/delete"
+        params = {"pr": "UCBrowser", "fr": "pc"}
+        payload = {"action_type": 2, "filelist": filelist, "exclude_fids": []}
+
+        try:
+            response = self._send_request("POST", url, json=payload, params=params)
+            result = self._safe_json(response)
+            return result
+        except Exception as e:
+            logging.error(f"[UC] 删除失败: {e}")
+            return {"code": 1, "message": f"删除失败: {e}"}
+
+    def get_fids(self, file_paths: List[str]) -> List[Dict]:
+        """根据路径获取文件 ID"""
+        fids = []
+        
+        while file_paths:
+            url = f"{self.BASE_URL}/1/clouddrive/file/info/path_list"
+            params = {"pr": "UCBrowser", "fr": "pc"}
+            payload = {"file_path": file_paths[:50], "namespace": "0"}
+
+            try:
+                response = self._send_request("POST", url, json=payload, params=params)
+                result = self._safe_json(response)
+                
+                if result.get("code") == 0:
+                    fids.extend(result.get("data", []))
+                    file_paths = file_paths[50:]
+                else:
+                    logging.error(f"[UC] 获取目录ID失败: {result.get('message')}")
+                    break
+                    
+            except Exception as e:
+                logging.error(f"[UC] 获取目录ID失败: {e}")
+                break
+
+        return fids
+
+    def extract_url(self, url: str) -> Tuple[Optional[str], str, Any, List]:
+        """
+        解析UC网盘分享链接
+        
+        支持格式:
+        - https://drive.uc.cn/s/{share_id}
+        - https://drive.uc.cn/s/{share_id}?password=xxxx
+        """
+        import urllib.parse
+
+        # pwd_id
+        match_id = re.search(r"/s/(\w+)", url)
+        pwd_id = match_id.group(1) if match_id else None
+        
+        # passcode
+        match_pwd = re.search(r"(?:pwd|password)=(\w+)", url)
+        passcode = match_pwd.group(1) if match_pwd else ""
+        
+        # path: fid-name
+        paths = []
+        matches = re.findall(r"/(\w{32})-?([^/]+)?", url)
+        for match in matches:
+            fid = match[0]
+            name = urllib.parse.unquote(match[1]).replace("*101", "-") if match[1] else ""
+            paths.append({"fid": fid, "name": name})
+        
+        pdir_fid = paths[-1]["fid"] if matches else 0
+
+        return pwd_id, passcode, pdir_fid, paths

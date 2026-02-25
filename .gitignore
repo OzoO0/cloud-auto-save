@@ -1,0 +1,8 @@
+quark_config_debug.json
+__pycache__
+/config
+.vscode
+.idea
+.venv
+venv*
+test.py
