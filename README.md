@@ -87,6 +87,7 @@ docker run -d \
   --network bridge \
   --restart unless-stopped \
   ozoo0/cloud-auto-save:latest
+  # registry.cn-hangzhou.aliyuncs.com/cp0204/quark-auto-save:latest # 国内镜像地址
 ```
 
 docker-compose.yml
