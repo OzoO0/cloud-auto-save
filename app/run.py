@@ -610,8 +610,10 @@ def get_share_detail():
                         share_file["file_name_re"] = file_name_re
             # 文件列表排序
             if re.search(r"\{I+\}", replace):
-                mr.set_dir_file_list(dir_file_list, replace)
-                mr.sort_file_list(data["list"])
+                # 获取排序起始值，如果没有配置则默认为 1
+                start_index = task.get("sort_index", 1)
+                mr.set_dir_file_list(dir_file_list, replace, start_index)
+                mr.sort_file_list(data["list"], start_index=start_index)
 
         if request.json.get("task"):
             preview_regex(data, share_account=account)
