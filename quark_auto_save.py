@@ -279,10 +279,16 @@ class MagicRename:
                 name = name.replace(keyword, f"_{i:02d}_")  # 替换为数字，方便排序
         return name
 
-    def sort_file_list(self, file_list, dir_filename_dict={}):
-        """文件列表统一排序，给{I+}赋值"""
+    def sort_file_list(self, file_list, dir_filename_dict={}, start_index=1):
+        """文件列表统一排序，给{I+}赋值
+            
+        Args:
+            file_list: 待排序的文件列表
+            dir_filename_dict: 目录文件字典
+            start_index: 排序起始值，默认为 1
+        """
         filename_list = [
-            # 强制加入`文件修改时间`字段供排序，效果：1无可排序字符时则按修改时间排序，2和目录已有文件重名时始终在其后
+            # 强制加入 `文件修改时间` 字段供排序，效果：1 无可排序字符时则按修改时间排序，2 和目录已有文件重名时始终在其后
             f"{f['file_name_re']}_{f['updated_at']}"
             for f in file_list
             if f.get("file_name_re") and not f["dir"]
@@ -295,7 +301,7 @@ class MagicRename:
         for name in filename_list:
             if name in dir_filename_dict.values():
                 continue
-            i = filename_list.index(name) + 1
+            i = filename_list.index(name) + start_index
             while i in dir_filename_dict.keys():
                 i += 1
             dir_filename_dict[i] = name
@@ -312,8 +318,14 @@ class MagicRename:
                         file["file_name_re"],
                     )
 
-    def set_dir_file_list(self, file_list, replace):
-        """设置目录文件列表"""
+    def set_dir_file_list(self, file_list, replace, start_index=1):
+        """设置目录文件列表
+        
+        Args:
+            file_list: 文件列表
+            replace: 替换表达式
+            start_index: 排序起始值，默认为 1
+        """
         self.dir_filename_dict = {}
         filename_list = [f["file_name"] for f in file_list if not f["dir"]]
         filename_list.sort()
@@ -338,6 +350,9 @@ class MagicRename:
                     self.dir_filename_dict[int(match.group(2))] = (
                         match.group(1) + magic_i + match.group(3)
                     )
+            # 如果目录中没有文件，使用起始值
+            if not self.dir_filename_dict:
+                self.magic_variable["{I}"] = start_index - 1  # 减 1 是因为后面会 +1
 
     def is_exists(self, filename, filename_list, ignore_ext=False):
         """判断文件是否存在，处理忽略扩展名"""
@@ -978,8 +993,10 @@ class Quark:
                 break
 
         if re.search(r"\{I+\}", replace):
-            mr.set_dir_file_list(dir_file_list, replace)
-            mr.sort_file_list(need_save_list)
+            # 获取排序起始值，如果没有配置则默认为 1
+            start_index = task.get("sort_index", 1)
+            mr.set_dir_file_list(dir_file_list, replace, start_index)
+            mr.sort_file_list(need_save_list, start_index=start_index)
 
         # 转存文件
         fid_list = [item["fid"] for item in need_save_list]
@@ -1493,8 +1510,10 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
             break
 
     if re.search(r"\{I+\}", replace):
-        mr.set_dir_file_list(dir_file_list, replace)
-        mr.sort_file_list(need_save_list)
+        # 获取排序起始值，如果没有配置则默认为 1
+        start_index = task.get("sort_index", 1)
+        mr.set_dir_file_list(dir_file_list, replace, start_index)
+        mr.sort_file_list(need_save_list, start_index=start_index)
 
     # 转存文件
     fid_list = [item["fid"] for item in need_save_list]
