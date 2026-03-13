@@ -257,8 +257,52 @@ class AccountManager:
         Returns:
             成功初始化的数量
         """
+        return self._init_adapters(self.adapters)
+
+    def init_adapters_for_tasks(self, tasklist: List[Dict]) -> int:
+        """
+        仅初始化与任务列表相关的适配器
+        根据任务的 shareurl 和 account_name 确定需要的网盘类型和账户
+        Args:
+            tasklist: 任务列表
+        Returns:
+            成功初始化的数量
+        """
+        needed_names = set()
+        needed_types = set()
+
+        for task in tasklist:
+            # 任务指定了账户名
+            if account_name := task.get("account_name"):
+                needed_names.add(account_name)
+            # 根据分享链接判断网盘类型
+            if shareurl := task.get("shareurl", ""):
+                if drive_type := AdapterFactory.get_drive_type_by_url(shareurl):
+                    needed_types.add(drive_type)
+
+        # 筛选需要初始化的适配器
+        needed_adapters = {
+            name: adapter
+            for name, adapter in self.adapters.items()
+            if name in needed_names or adapter.DRIVE_TYPE in needed_types
+        }
+
+        if not needed_adapters:
+            # 没有匹配到任何适配器，回退到全部初始化
+            return self._init_adapters(self.adapters)
+
+        return self._init_adapters(needed_adapters)
+
+    def _init_adapters(self, adapters: Dict[str, "BaseCloudDriveAdapter"]) -> int:
+        """
+        初始化指定的适配器集合
+        Args:
+            adapters: 需要初始化的适配器字典
+        Returns:
+            成功初始化的数量
+        """
         success_count = 0
-        for name, adapter in self.adapters.items():
+        for name, adapter in adapters.items():
             if adapter.init():
                 success_count += 1
                 print(f"✅ 账户 '{name}' ({adapter.DRIVE_TYPE}) 登录成功: {adapter.nickname}")

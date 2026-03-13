@@ -18,8 +18,30 @@ import requests
 import importlib
 import traceback
 import urllib.parse
+import logging
 from datetime import datetime
-from natsort import natsorted
+from natsort import natsort,natsorted
+
+# 导入日志工具
+try:
+    from utils.logger import get_logger, log_function_call, log_execution_time
+    logger = get_logger("quark_auto_save")
+except ImportError:
+    # 兼容模式：如果没有日志模块，使用基础 logging
+    logging.basicConfig(
+        level=logging.DEBUG if os.getenv('DEBUG', 'false').lower() == 'true' else logging.INFO,
+        format='%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s'
+    )
+    logger = logging.getLogger("quark_auto_save")
+    def log_function_call(func):
+        return func
+    class log_execution_time:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
 
 # 多网盘适配器支持
 try:
@@ -215,30 +237,64 @@ class MagicRename:
     ]
 
     def __init__(self, magic_regex={}, magic_variable={}):
+        """初始化 MagicRegex 类
+        
+        Args:
+            magic_regex: 自定义正则表达式规则
+            magic_variable: 自定义变量替换规则
+        """
+        logger.debug(f"[MagicRegex.__init__] 初始化，magic_regex={magic_regex}, magic_variable={magic_variable}")
         self.magic_regex.update(magic_regex)
         self.magic_variable.update(magic_variable)
         self.dir_filename_dict = {}
+        logger.debug(f"[MagicRegex.__init__] 初始化完成，加载了 {len(self.magic_regex)} 条正则规则和 {len(self.magic_variable)} 个变量")
 
     def set_taskname(self, taskname):
         """设置任务名称"""
+        logger.debug(f"[MagicRegex.set_taskname] 设置任务名：{taskname}")
         self.magic_variable["{TASKNAME}"] = taskname
 
     def magic_regex_conv(self, pattern, replace):
-        """魔法正则匹配"""
+        """魔法正则匹配转换
+        
+        Args:
+            pattern: 匹配表达式或魔法关键词
+            replace: 替换表达式
+            
+        Returns:
+            tuple: (实际的正则表达式，实际的替换字符串)
+        """
+        logger.debug(f"[MagicRegex.magic_regex_conv] 输入：pattern={pattern}, replace={replace}")
         keyword = pattern
         if keyword in self.magic_regex:
             pattern = self.magic_regex[keyword]["pattern"]
             if replace == "":
                 replace = self.magic_regex[keyword]["replace"]
+            logger.debug(f"[MagicRegex.magic_regex_conv] 使用魔法匹配：{keyword} -> pattern={pattern}, replace={replace}")
+        logger.debug(f"[MagicRegex.magic_regex_conv] 输出：pattern={pattern}, replace={replace}")
         return pattern, replace
 
     def sub(self, pattern, replace, file_name):
-        """魔法正则、变量替换"""
+        """魔法正则、变量替换
+            
+        Args:
+            pattern: 正则表达式
+            replace: 替换字符串
+            file_name: 原始文件名
+                
+        Returns:
+            str: 替换后的文件名
+        """
+        logger.debug(f"[MagicRegex.sub] 开始处理：file_name={file_name}, pattern={pattern}, replace={replace}")
+            
         if not replace:
+            logger.debug(f"[MagicRegex.sub] replace 为空，直接返回原文件名")
             return file_name
+                
         # 预处理替换变量
         for key, p_list in self.magic_variable.items():
             if key in replace:
+                logger.debug(f"[MagicRegex.sub] 处理变量：{key}")
                 # 正则类替换变量
                 if p_list and isinstance(p_list, list):
                     for p in p_list:
@@ -246,7 +302,7 @@ class MagicRename:
                         if match:
                             # 匹配成功，替换为匹配到的值
                             value = match.group()
-                            # 日期格式处理：补全、格式化
+                            # 日期格式转换：补全、格式化
                             if key == "{DATE}":
                                 value = "".join(
                                     [char for char in value if char.isdigit()]
@@ -255,21 +311,31 @@ class MagicRename:
                                     str(datetime.now().year)[: (8 - len(value))] + value
                                 )
                             replace = replace.replace(key, value)
+                            logger.debug(f"[MagicRegex.sub] {key} 匹配成功：{value}")
                             break
                 # 非正则类替换变量
                 if key == "{TASKNAME}":
                     replace = replace.replace(key, self.magic_variable["{TASKNAME}"])
+                    logger.debug(f"[MagicRegex.sub] 替换 TASKNAME: {self.magic_variable['{TASKNAME}']}")
                 elif key == "{SXX}" and not match:
                     replace = replace.replace(key, "S01")
+                    logger.debug(f"[MagicRegex.sub] {key} 未匹配，使用默认值 S01")
                 elif key == "{I}":
+                    logger.debug(f"[MagicRegex.sub] 跳过排序变量 {key}")
                     continue
                 else:
                     # 清理未匹配的 magic_variable key
                     replace = replace.replace(key, "")
+                    logger.debug(f"[MagicRegex.sub] 清理未匹配的变量：{key}")
+                        
         if pattern and replace:
+            logger.debug(f"[MagicRegex.sub] 执行正则替换：re.sub({pattern}, {replace}, {file_name})")
             file_name = re.sub(pattern, replace, file_name)
         else:
+            logger.debug(f"[MagicRegex.sub] 直接使用替换式：{replace}")
             file_name = replace
+                
+        logger.debug(f"[MagicRegex.sub] 最终结果：{file_name}")
         return file_name
 
     def _custom_sort_key(self, name):
@@ -287,16 +353,24 @@ class MagicRename:
             dir_filename_dict: 目录文件字典
             start_index: 排序起始值，默认为 1
         """
+        logger.debug(f"[MagicRegex.sort_file_list] 开始排序，start_index={start_index}, file_list 数量={len(file_list)}")
+            
         filename_list = [
             # 强制加入 `文件修改时间` 字段供排序，效果：1 无可排序字符时则按修改时间排序，2 和目录已有文件重名时始终在其后
             f"{f['file_name_re']}_{f['updated_at']}"
             for f in file_list
             if f.get("file_name_re") and not f["dir"]
         ]
+        logger.debug(f"[MagicRegex.sort_file_list] 提取文件名列表：{len(filename_list)} 个文件")
+            
         dir_filename_dict = dir_filename_dict or self.dir_filename_dict
         # 合并目录文件列表
         filename_list = list(set(filename_list) | set(dir_filename_dict.values()))
+        logger.debug(f"[MagicRegex.sort_file_list] 合并后文件列表：{len(filename_list)} 个文件")
+            
         filename_list = natsorted(filename_list, key=self._custom_sort_key)
+        logger.debug(f"[MagicRegex.sort_file_list] 自然排序完成")
+            
         filename_index = {}
         for name in filename_list:
             if name in dir_filename_dict.values():
@@ -306,17 +380,24 @@ class MagicRename:
                 i += 1
             dir_filename_dict[i] = name
             filename_index[name] = i
+            
+        logger.debug(f"[MagicRegex.sort_file_list] 生成索引映射：{len(filename_index)} 个文件")
+            
         for file in file_list:
             if file.get("file_name_re"):
                 if match := re.search(r"\{I+\}", file["file_name_re"]):
                     i = filename_index.get(
                         f"{file['file_name_re']}_{file['updated_at']}", 0
                     )
+                    old_name = file["file_name_re"]
                     file["file_name_re"] = re.sub(
                         match.group(),
                         str(i).zfill(match.group().count("I")),
                         file["file_name_re"],
                     )
+                    logger.debug(f"[MagicRegex.sort_file_list] 替换序号：{old_name} -> {file['file_name_re']}")
+            
+        logger.debug(f"[MagicRegex.sort_file_list] 排序完成，共处理 {len(filename_index)} 个文件")
 
     def set_dir_file_list(self, file_list, replace, start_index=1):
         """设置目录文件列表
@@ -326,11 +407,17 @@ class MagicRename:
             replace: 替换表达式
             start_index: 排序起始值，默认为 1
         """
+        logger.debug(f"[MagicRegex.set_dir_file_list] 开始处理，start_index={start_index}, file_list 数量={len(file_list)}")
+        
         self.dir_filename_dict = {}
         filename_list = [f["file_name"] for f in file_list if not f["dir"]]
         filename_list.sort()
+        logger.debug(f"[MagicRegex.set_dir_file_list] 提取文件名并排序：{len(filename_list)} 个文件")
+        
         if not filename_list:
+            logger.debug(f"[MagicRegex.set_dir_file_list] 文件名列表为空，跳过处理")
             return
+            
         if match := re.search(r"\{I+\}", replace):
             # 由替换式转换匹配式
             magic_i = match.group()
@@ -341,18 +428,29 @@ class MagicRename:
                     pattern = pattern.replace(key, "🔣")
             pattern = re.sub(r"\\[0-9]+", "🔣", pattern)  # \1 \2 \3
             pattern = f"({re.escape(pattern).replace('🔣', '.*?').replace('🔢', f')({pattern_i})(')})"
+            logger.debug(f"[MagicRegex.set_dir_file_list] 构建正则模式：{pattern}")
+            
             # 获取起始编号
             if match := re.match(pattern, filename_list[-1]):
-                self.magic_variable["{I}"] = int(match.group(2))
+                last_index = int(match.group(2))
+                self.magic_variable["{I}"] = last_index
+                logger.debug(f"[MagicRegex.set_dir_file_list] 从现有文件提取最后序号：{last_index}")
+            
             # 目录文件列表
             for filename in filename_list:
                 if match := re.match(pattern, filename):
                     self.dir_filename_dict[int(match.group(2))] = (
                         match.group(1) + magic_i + match.group(3)
                     )
+            
+            logger.debug(f"[MagicRegex.set_dir_file_list] 建立目录索引：{len(self.dir_filename_dict)} 个文件")
+            
             # 如果目录中没有文件，使用起始值
             if not self.dir_filename_dict:
                 self.magic_variable["{I}"] = start_index - 1  # 减 1 是因为后面会 +1
+                logger.debug(f"[MagicRegex.set_dir_file_list] 目录为空，设置初始值：{start_index - 1}")
+        
+        logger.info(f"[MagicRegex.set_dir_file_list] 处理完成，目录中有 {len(self.dir_filename_dict)} 个文件")
 
     def is_exists(self, filename, filename_list, ignore_ext=False):
         """判断文件是否存在，处理忽略扩展名"""
@@ -910,6 +1008,11 @@ class Quark:
         need_save_list = []
         # 添加符合的
         for share_file in share_file_list:
+            # 如果是目录且未启用更新子目录，直接跳过
+            if share_file["dir"] and not task.get("update_subdir"):
+                logger.debug(f"[dir_check_and_save] 跳过目录：{share_file['file_name']}")
+                continue
+                
             search_pattern = (
                 task["update_subdir"]
                 if share_file["dir"] and task.get("update_subdir")
@@ -995,6 +1098,13 @@ class Quark:
         if re.search(r"\{I+\}", replace):
             # 获取排序起始值，如果没有配置则默认为 1
             start_index = task.get("sort_index", 1)
+            if not start_index or start_index == "":
+                start_index = 1
+            else:
+                try:
+                    start_index = int(start_index)
+                except (ValueError, TypeError):
+                    start_index = 1
             mr.set_dir_file_list(dir_file_list, replace, start_index)
             mr.sort_file_list(need_save_list, start_index=start_index)
 
@@ -1442,6 +1552,11 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
 
     # 添加符合的
     for share_file in share_file_list:
+        # 如果是目录且未启用更新子目录，直接跳过
+        if share_file["dir"] and not task.get("update_subdir"):
+            logger.debug(f"[dir_check_and_save_with_adapter] 跳过目录：{share_file['file_name']}")
+            continue
+            
         search_pattern = (
             task["update_subdir"]
             if share_file["dir"] and task.get("update_subdir")
@@ -1512,6 +1627,13 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
     if re.search(r"\{I+\}", replace):
         # 获取排序起始值，如果没有配置则默认为 1
         start_index = task.get("sort_index", 1)
+        if not start_index or start_index == "":
+            start_index = 1
+        else:
+            try:
+                start_index = int(start_index)
+            except (ValueError, TypeError):
+                start_index = 1
         mr.set_dir_file_list(dir_file_list, replace, start_index)
         mr.sort_file_list(need_save_list, start_index=start_index)
 
@@ -1524,6 +1646,17 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
         err_msg = None
         save_as_top_fids = []
 
+        # UC 特殊处理：先转存到"来自：分享"中转文件夹
+        actual_save_fid = to_pdir_fid
+        share_folder_fid = None
+        if hasattr(adapter, 'DRIVE_TYPE') and adapter.DRIVE_TYPE == "uc":
+            share_folder_fid = adapter.get_or_create_share_folder()
+            if share_folder_fid:
+                actual_save_fid = share_folder_fid
+                print("[UC] 使用中转目录: 来自：分享")
+            else:
+                print("[UC] 获取中转目录失败，直接转存到目标目录")
+
         while fid_list:
             batch_fids = fid_list[:100]
             batch_tokens = fid_token_list[:100]
@@ -1532,12 +1665,12 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
             # 115 适配器支持 file_names 参数，用于按文件名匹配新 fid
             if hasattr(adapter, 'DRIVE_TYPE') and (adapter.DRIVE_TYPE == "115" or adapter.DRIVE_TYPE == "baidu"):
                 save_file_return = adapter.save_file(
-                    batch_fids, batch_tokens, to_pdir_fid, pwd_id, stoken,
+                    batch_fids, batch_tokens, actual_save_fid, pwd_id, stoken,
                     file_names=batch_names
                 )
             else:
                 save_file_return = adapter.save_file(
-                    batch_fids, batch_tokens, to_pdir_fid, pwd_id, stoken
+                    batch_fids, batch_tokens, actual_save_fid, pwd_id, stoken
                 )
 
             fid_list = fid_list[100:]
@@ -1554,9 +1687,15 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
                     task_id = save_file_return["data"]["task_id"]
                     query_task_return = adapter.query_task(task_id)
                     if query_task_return["code"] == 0:
-                        save_as_top_fids.extend(
-                            query_task_return["data"]["save_as"]["save_as_top_fids"]
-                        )
+                        # UC 使用 save_as_select_top_fids（转存后实际文件fid）
+                        if hasattr(adapter, 'DRIVE_TYPE') and adapter.DRIVE_TYPE == "uc":
+                            save_as_top_fids.extend(
+                                query_task_return["data"]["save_as"].get("save_as_select_top_fids", [])
+                            )
+                        else:
+                            save_as_top_fids.extend(
+                                query_task_return["data"]["save_as"]["save_as_top_fids"]
+                            )
                     else:
                         err_msg = query_task_return.get("message", "查询任务失败")
             else:
@@ -1564,6 +1703,17 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
 
             if err_msg:
                 add_notify(f"❌《{task['taskname']}》转存失败：{err_msg}\n")
+
+        # UC 特殊处理：将转存到"来自：分享"的文件移动到目标目录
+        if hasattr(adapter, 'DRIVE_TYPE') and adapter.DRIVE_TYPE == "uc" and share_folder_fid and save_as_top_fids:
+            print(f"[UC] 正在将 {len(save_as_top_fids)} 个文件移动到目标目录...")
+            move_result = adapter.move_files_to_target(save_as_top_fids, to_pdir_fid)
+            if move_result["code"] != 0:
+                move_err = move_result.get("message", "移动失败")
+                add_notify(f"❌《{task['taskname']}》文件移动失败：{move_err}\n")
+                save_as_top_fids = []  # 清空，阻止后续 tree 构建和重命名
+            else:
+                print(f"[UC] 文件移动完成")
 
         # 建立目录树
         if len(need_save_list) == len(save_as_top_fids):
@@ -1677,9 +1827,10 @@ def main():
         account_manager = AccountManager()
         account_manager.load_accounts(CONFIG_DATA)
 
-        # 验证并初始化所有账户
+        # 验证并初始化与任务相关的账户
+        tasklist = tasklist_from_env or CONFIG_DATA.get("tasklist", [])
         print(f"===============验证账户===============")
-        active_count = account_manager.init_all_adapters()
+        active_count = account_manager.init_adapters_for_tasks(tasklist)
         if active_count == 0:
             print("❌ 没有可用的账户")
             return
@@ -1695,10 +1846,7 @@ def main():
         # 转存
         if cookie_form_file:
             print(f"===============转存任务===============")
-            if tasklist_from_env:
-                do_save_multi_drive(account_manager, tasklist_from_env)
-            else:
-                do_save_multi_drive(account_manager, CONFIG_DATA.get("tasklist", []))
+            do_save_multi_drive(account_manager, tasklist)
             print()
     else:
         # 旧格式：兼容现有逻辑

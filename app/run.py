@@ -30,6 +30,27 @@ import os
 import re
 import time
 
+# 导入日志工具
+try:
+    from utils.logger import get_logger, log_function_call, log_execution_time
+    logger = get_logger("app.run")
+except ImportError:
+    # 兼容模式
+    logging.basicConfig(
+        level=logging.DEBUG if os.getenv('DEBUG', 'false').lower() == 'true' else logging.INFO,
+        format='%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s'
+    )
+    logger = logging.getLogger("app.run")
+    def log_function_call(func):
+        return func
+    class log_execution_time:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
 from quark_auto_save import Quark, Config, MagicRename
@@ -61,19 +82,28 @@ sys.stdout.flush()
 
 def get_app_ver():
     """获取应用版本"""
+    logger.debug("[get_app_ver] 开始获取应用版本")
     try:
         with open("build.json", "r") as f:
             build_info = json.loads(f.read())
             BUILD_SHA = build_info["BUILD_SHA"]
             BUILD_TAG = build_info["BUILD_TAG"]
+            logger.debug(f"[get_app_ver] 从 build.json 读取：BUILD_TAG={BUILD_TAG}, BUILD_SHA={BUILD_SHA}")
     except Exception as e:
+        logger.warning(f"[get_app_ver] 读取 build.json 失败：{e}，尝试从环境变量读取")
         BUILD_SHA = os.getenv("BUILD_SHA", "")
         BUILD_TAG = os.getenv("BUILD_TAG", "")
+        logger.debug(f"[get_app_ver] 从环境变量读取：BUILD_TAG={BUILD_TAG}, BUILD_SHA={BUILD_SHA}")
+    
     if BUILD_TAG[:1] == "v":
+        logger.debug(f"[get_app_ver] 返回正式版本号：{BUILD_TAG}")
         return BUILD_TAG
     elif BUILD_SHA:
-        return f"{BUILD_TAG}({BUILD_SHA[:7]})"
+        version = f"{BUILD_TAG}({BUILD_SHA[:7]})"
+        logger.debug(f"[get_app_ver] 返回开发版本号：{version}")
+        return version
     else:
+        logger.debug(f"[get_app_ver] 返回 dev 版本")
         return "dev"
 
 
@@ -490,40 +520,59 @@ def get_task_suggestions():
 
 @app.route("/get_share_detail", methods=["POST"])
 def get_share_detail():
+    """获取分享详情接口，支持正则预览处理"""
+    logger.debug(f"[get_share_detail] 收到请求")
+    
     if not is_login():
+        logger.warning(f"[get_share_detail] 用户未登录")
         return jsonify({"success": False, "message": "未登录"})
     
     try:
         shareurl = request.json.get("shareurl", "")
         stoken = request.json.get("stoken", "")
         account_name = request.json.get("account_name", "")
+        task = request.json.get("task", {})
+        magic_regex = request.json.get("magic_regex", {})
+        
+        logger.debug(f"[get_share_detail] 请求参数：shareurl={shareurl[:50] if shareurl else 'None'}..., account_name={account_name}")
+        logger.debug(f"[get_share_detail] 任务配置：pattern={task.get('pattern', '')}, replace={task.get('replace', '')}, sort_index={task.get('sort_index', 1)}")
         
         # 根据 URL 或指定账户获取适配器
         if account_name and account_name != "auto":
             account, drive_type = get_account_by_name(account_name)
+            logger.debug(f"[get_share_detail] 使用指定账户：{account_name}, 类型：{drive_type}")
         else:
             account, drive_type = get_adapter_for_url(shareurl)
+            logger.debug(f"[get_share_detail] 自动检测账户类型：{drive_type}")
         
         if not account:
-            # 检测URL类型以提供更详细的错误信息
+            # 检测 URL 类型以提供更详细的错误信息
             detected_type = AdapterFactory.get_drive_type_by_url(shareurl) if MULTI_DRIVE_SUPPORT else "quark"
-            type_label = {"quark": "夸克网盘", "115": "115网盘"}.get(detected_type, detected_type)
+            type_label = {"quark": "夸克网盘", "115": "115 网盘"}.get(detected_type, detected_type)
+            logger.error(f"[get_share_detail] 未配置{type_label}账户")
             return jsonify({"success": False, "data": {"error": f"未配置有效的{type_label}账户，请先在「系统配置」→「多网盘账户」中添加{type_label}账户"}})
-
+        
         pwd_id, passcode, pdir_fid, paths = account.extract_url(shareurl)
+        logger.debug(f"[get_share_detail] 解析分享链接：pwd_id={pwd_id}, pdir_fid={pdir_fid}")
+                
         if not stoken:
+            logger.debug(f"[get_share_detail] stoken 为空，开始获取")
             get_stoken = account.get_stoken(pwd_id, passcode)
             if get_stoken.get("status") == 200:
                 stoken = get_stoken["data"]["stoken"]
+                logger.debug(f"[get_share_detail] stoken 获取成功")
             else:
+                logger.error(f"[get_share_detail] stoken 获取失败：{get_stoken.get('message')}")
                 return jsonify(
                     {"success": False, "data": {"error": get_stoken.get("message")}}
                 )
         share_detail = account.get_detail(
             pwd_id, stoken, pdir_fid, _fetch_share=1, fetch_share_full_path=1
         )
+        logger.debug(f"[get_share_detail] 获取分享详情，文件数量：{len(share_detail.get('data', {}).get('list', []))}")
 
         if share_detail.get("code") != 0:
+            logger.error(f"[get_share_detail] 分享详情获取失败：{share_detail.get('message')}")
             return jsonify(
                 {"success": False, "data": {"error": share_detail.get("message")}}
             )
@@ -535,58 +584,73 @@ def get_share_detail():
         ] or paths
         data["stoken"] = stoken
         data["drive_type"] = drive_type  # 返回网盘类型供前端使用
+        logger.debug(f"[get_share_detail] 分享详情获取成功，路径：{'/'.join([p['name'] for p in data['paths']])}")
 
         # 正则处理预览
         def preview_regex(data, share_account=None):
             """
             对分享文件列表应用正则预览处理。
-            
+                    
             Args:
                 data: 分享文件列表数据
                 share_account: 用于获取分享的账户（作为后备账户使用）
             """
+            logger.debug(f"[preview_regex] 开始执行正则预览处理")
             task = request.json.get("task", {})
             magic_regex = request.json.get("magic_regex", {})
             mr = MagicRename(magic_regex)
             mr.set_taskname(task.get("taskname", ""))
+            logger.debug(f"[preview_regex] 任务名：{task.get('taskname', '')}, 正则规则数：{len(magic_regex)}")
+                    
             # 获取用于预览的账户（用于查看目标目录中的已有文件）
-            # 优先级：1.任务指定的账户 2.用于获取分享的账户 3.旧格式cookie
+            # 优先级：1. 任务指定的账户 2. 用于获取分享的账户 3. 旧格式 cookie
             preview_account = None
             task_account_name = task.get("account_name", "")
-            
+                    
             if task_account_name and task_account_name != "auto":
                 preview_account, _ = get_account_by_name(task_account_name)
-            
+                logger.debug(f"[preview_regex] 使用任务指定账户：{task_account_name}")
+                    
             if not preview_account and share_account:
                 # 使用获取分享时的同一个账户
                 preview_account = share_account
-            
+                logger.debug(f"[preview_regex] 使用分享账户进行预览")
+                    
             if not preview_account:
                 # 回退到旧格式
                 if config_data.get("cookie"):
                     preview_account = Quark(config_data["cookie"][0])
+                    logger.debug(f"[preview_regex] 使用旧格式 cookie 账户")
                 else:
+                    logger.warning(f"[preview_regex] 未配置任何账户，跳过预览")
                     return
             
             # 获取目标目录的已有文件列表
             dir_file_list = []
             dir_filename_list = []
             savepath = task.get("savepath", "")
-            
+                        
             if savepath:
+                logger.debug(f"[preview_regex] 开始获取目标目录文件列表：{savepath}")
                 try:
                     get_fids = preview_account.get_fids([savepath])
                     if get_fids:
+                        logger.debug(f"[preview_regex] 获取目录 fid: {get_fids[0]['fid']}")
                         ls_result = preview_account.ls_dir(get_fids[0]["fid"])
                         if ls_result and "data" in ls_result:
                             dir_file_list = ls_result["data"].get("list", [])
                             dir_filename_list = [f["file_name"] for f in dir_file_list]
+                            logger.debug(f"[preview_regex] 目标目录中有 {len(dir_file_list)} 个文件")
                 except Exception as e:
-                    logging.warning(f"[preview_regex] 获取目标目录失败: {e}")
+                    logger.warning(f"[preview_regex] 获取目标目录失败：{e}")
+            else:
+                logger.debug(f"[preview_regex] 未配置保存路径，跳过目录文件获取")
 
             pattern, replace = mr.magic_regex_conv(
                 task.get("pattern", ""), task.get("replace", "")
             )
+            logger.debug(f"[preview_regex] 正则表达式：pattern={pattern}, replace={replace}")
+            
             for share_file in data["list"]:
                 search_pattern = (
                     task["update_subdir"]
@@ -606,14 +670,31 @@ def get_share_detail():
                         (task.get("ignore_extension") and not share_file["dir"]),
                     ):
                         share_file["file_name_saved"] = file_name_saved
+                        logger.debug(f"[preview_regex] 文件已存在：{share_file['file_name']} -> {file_name_saved}")
                     else:
                         share_file["file_name_re"] = file_name_re
+                        logger.debug(f"[preview_regex] 文件重命名：{share_file['file_name']} -> {file_name_re}")
+                # 与实际转存逻辑一致：到达指定文件（含）后停止
+                if share_file["fid"] == task.get("startfid", ""):
+                    break
+            
             # 文件列表排序
             if re.search(r"\{I+\}", replace):
                 # 获取排序起始值，如果没有配置则默认为 1
                 start_index = task.get("sort_index", 1)
+                if not start_index or start_index == "":
+                    start_index = 1
+                else:
+                    try:
+                        start_index = int(start_index)
+                    except (ValueError, TypeError):
+                        start_index = 1
+                logger.debug(f"[preview_regex] 检测到排序变量 {{I+}}，使用排序基数：start_index={start_index}")
                 mr.set_dir_file_list(dir_file_list, replace, start_index)
                 mr.sort_file_list(data["list"], start_index=start_index)
+                logger.debug(f"[preview_regex] 排序完成，应用 sort_index={start_index}")
+            else:
+                logger.debug(f"[preview_regex] 未检测到排序变量，跳过排序处理")
 
         if request.json.get("task"):
             preview_regex(data, share_account=account)

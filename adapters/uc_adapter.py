@@ -32,6 +32,8 @@ class UCAdapter(BaseCloudDriveAdapter):
         super().__init__(cookie, index)
         self._cookies_dict: Dict[str, str] = {}
         
+        self._share_folder_fid: Optional[str] = None
+        
         # 解析 cookie
         if cookie:
             for item in cookie.split(";"):
@@ -243,7 +245,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             "pdir_fid": "0",
             "scene": "link",
         }
-
+        logging.debug(f"[UC] 转存文件参数: {payload}")
         try:
             response = self._send_request("POST", url, json=payload, params=params)
             result = self._safe_json(response)
@@ -253,7 +255,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             if "capacity limit" in msg.lower():
                 logging.error("[UC] 网盘容量不足，无法转存")
                 return {"code": 1, "status": 400, "message": "UC网盘容量不足，请清理空间后重试", "data": {}}
-
+            logging.debug(f"[UC] 转存结果: {result}")
             return result
         except Exception as e:
             logging.error(f"[UC] 转存失败: {e}")
@@ -264,7 +266,7 @@ class UCAdapter(BaseCloudDriveAdapter):
         retry_index = 0
         max_retries = 60
         result = {"status": 500, "code": 1, "message": "任务查询超时"}
-
+        logging.debug(f"[UC] 查询任务: {task_id}")
         while retry_index < max_retries:
             url = f"{self.BASE_URL}/1/clouddrive/task"
             params = {
@@ -314,7 +316,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             except Exception as e:
                 logging.error(f"[UC] 查询任务失败: {e}")
                 return {"status": 500, "code": 1, "message": f"查询任务失败: {e}"}
-
+        logging.debug(f"[UC] 任务结果: {result}")
         return result
 
     def mkdir(self, dir_path: str) -> Dict:
@@ -363,6 +365,84 @@ class UCAdapter(BaseCloudDriveAdapter):
         except Exception as e:
             logging.error(f"[UC] 删除失败: {e}")
             return {"code": 1, "message": f"删除失败: {e}"}
+
+    def move_file(self, filelist: List[str], to_pdir_fid: str) -> Dict:
+        """移动文件到指定目录"""
+        url = f"{self.BASE_URL}/1/clouddrive/file/move"
+        params = {"pr": "UCBrowser", "fr": "pc"}
+        payload = {
+            "action_type": 1,
+            "to_pdir_fid": to_pdir_fid,
+            "filelist": filelist,
+            "exclude_fids": [],
+        }
+        logging.debug(f"[UC] 移动文件: {filelist} -> {to_pdir_fid}")
+        try:
+            response = self._send_request("POST", url, json=payload, params=params)
+            result = self._safe_json(response)
+            logging.debug(f"[UC] 移动文件结果: {result}")
+            return result
+        except Exception as e:
+            logging.error(f"[UC] 移动文件失败: {e}")
+            return {"code": 1, "message": f"移动文件失败: {e}"}
+
+    def get_or_create_share_folder(self) -> Optional[str]:
+        """获取或创建'来自：分享'文件夹，返回其fid"""
+        if self._share_folder_fid:
+            return self._share_folder_fid
+
+        # 列出根目录查找"来自：分享"文件夹
+        try:
+            root_list = self.ls_dir("0")
+            if root_list.get("code") == 0:
+                for item in root_list.get("data", {}).get("list", []):
+                    if item.get("file_name") == "来自：分享" and item.get("dir"):
+                        self._share_folder_fid = item["fid"]
+                        return self._share_folder_fid
+            else:
+                logging.warning(f"[UC] 列出根目录失败: {root_list.get('message')}")
+                return None
+        except Exception as e:
+            logging.warning(f"[UC] 列出根目录异常: {e}")
+            return None
+
+        # 未找到，创建文件夹
+        try:
+            mkdir_result = self.mkdir("/来自：分享")
+            if mkdir_result.get("code") == 0:
+                self._share_folder_fid = mkdir_result["data"]["fid"]
+                logging.debug("[UC] 创建中转文件夹: 来自：分享")
+                return self._share_folder_fid
+            else:
+                logging.warning(f"[UC] 创建'来自：分享'文件夹失败: {mkdir_result.get('message')}")
+                return None
+        except Exception as e:
+            logging.warning(f"[UC] 创建'来自：分享'文件夹异常: {e}")
+            return None
+
+    def move_files_to_target(self, fid_list: List[str], to_pdir_fid: str) -> Dict:
+        """将指定文件移动到目标目录，支持分批+轮询"""
+        if not fid_list:
+            return {"code": 0, "message": "无文件需要移动"}
+
+        logging.debug(f"[UC] 移动 {len(fid_list)} 个文件到目标目录...")
+        remaining = fid_list[:]
+        while remaining:
+            batch = remaining[:100]
+            remaining = remaining[100:]
+
+            move_result = self.move_file(batch, to_pdir_fid)
+            if move_result.get("code") != 0:
+                return move_result
+
+            task_id = move_result.get("data", {}).get("task_id")
+            if task_id:
+                query_result = self.query_task(task_id)
+                if query_result.get("code") != 0 or query_result.get("data", {}).get("status") == -1:
+                    msg = query_result.get("data", {}).get("message", query_result.get("message", "移动任务失败"))
+                    return {"code": 1, "message": msg}
+
+        return {"code": 0, "message": "移动完成"}
 
     def get_fids(self, file_paths: List[str]) -> List[Dict]:
         """根据路径获取文件 ID"""
