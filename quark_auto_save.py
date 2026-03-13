@@ -1771,7 +1771,7 @@ def main():
     global CONFIG_DATA
     start_time = datetime.now()
     print(f"===============程序开始===============")
-    print(f"⏰ 执行时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[*] 执行时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     # 读取启动参数
     config_path = sys.argv[1] if len(sys.argv) > 1 else "quark_config.json"

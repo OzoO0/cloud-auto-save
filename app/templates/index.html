@@ -34,6 +34,9 @@
         <button type="button" class="seg-btn" :class="{active: activeTab === 'tasklist'}" @click="changeTab('tasklist')">
           <i class="bi bi-list-task"></i> 任务列表
         </button>
+        <button type="button" class="seg-btn" :class="{active: activeTab === 'sync'}" @click="changeTab('sync')">
+          <i class="bi bi-arrow-repeat"></i> 数据同步
+        </button>
       </div>
       <div class="navbar-actions">
         <a href="/logout" title="退出登录"><i class="bi bi-box-arrow-right"></i> <span>退出</span></a>
@@ -601,12 +604,203 @@
             </div>
           </div>
 
+          <div v-if="activeTab === 'sync'">
+
+            <!-- 同步任务为空时的提示 -->
+            <div v-if="syncTasks.length === 0" class="sync-empty-state">
+              <i class="bi bi-arrow-repeat d-block"></i>
+              <p>暂无数据同步任务</p>
+              <p style="font-size:0.8rem">点击下方按钮添加您的第一个同步任务</p>
+            </div>
+
+            <!-- 同步任务卡片列表 -->
+            <div v-for="(task, index) in syncTasks" :key="'sync_'+index" class="task-card" :class="{'sync-task-running': syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'running')}">
+              <div class="task-card-header" @click="handleSyncCardClick(task, index)" style="cursor:pointer">
+                <div class="task-info">
+                  <span class="collapse-arrow"><i class="bi" :class="task._expanded ? 'bi-caret-down-fill' : 'bi-caret-right-fill'"></i></span>
+                  <span class="sync-status-dot" :class="getSyncTaskStatusClass(task.task_id)"></span>
+                  <span class="task-name">{{ task.taskname || '未命名任务' }}</span>
+                  <span class="sync-mode-badge" :class="task.sync_mode">{{ task.sync_mode === 'incremental' ? '增量' : '覆盖' }}</span>
+                  <span v-if="!task.enabled" class="badge badge-secondary" style="font-size:0.65rem">已禁用</span>
+                  <span class="sync-running-badge" v-if="syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'running')">
+                    <i class="bi bi-arrow-repeat spin"></i> 运行中
+                  </span>
+                  <span class="last-run" v-else-if="syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].last_run_time">
+                    上次: {{ $options.filters.ts2date(syncTaskStatus[task.task_id].last_run_time) }}
+                  </span>
+                </div>
+                <div class="task-actions" @click.stop>
+                  <button type="button" class="btn btn-outline-primary btn-sm" @click="runSyncTask(index)" :disabled="syncRunning[task.task_id]" :title="syncRunning[task.task_id] ? '运行中' : '立即执行'">
+                    <i class="bi" :class="syncRunning[task.task_id] ? 'bi-hourglass-split' : 'bi-play-fill'"></i>
+                  </button>
+                  <button type="button" class="btn btn-outline-primary btn-sm" @click="showSyncRecords(task.task_id)" title="同步记录">
+                    <i class="bi bi-clock-history"></i>
+                  </button>
+                  <button type="button" class="btn btn-outline-danger btn-sm" @click="removeSyncTask(index)" title="删除任务">
+                    <i class="bi bi-trash3-fill"></i>
+                  </button>
+                </div>
+              </div>
+
+              <!-- 运行中进度条（始终显示，不受展开状态影响） -->
+              <div class="sync-running-bar" v-if="syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'running')">
+                <div class="sync-running-indicator">
+                  <div class="sync-running-progress"></div>
+                </div>
+                <div class="sync-running-info">
+                  <span class="sync-running-text"><i class="bi bi-hourglass-split spin"></i> 正在同步中...</span>
+                  <button type="button" class="btn btn-link btn-sm sync-view-log-btn" @click.stop="runSyncTask_viewLog(task.task_id)">
+                    <i class="bi bi-terminal"></i> 查看日志
+                  </button>
+                </div>
+              </div>
+
+              <!-- 折叠时简略配置摘要 -->
+              <div class="sync-card-summary" v-show="!task._expanded">
+                <span class="sync-summary-item" :title="task.source_dir"><i class="bi bi-folder"></i> {{ task.source_dir || '未设置' }}</span>
+                <i class="bi bi-arrow-right sync-summary-arrow"></i>
+                <span class="sync-summary-item" :title="task.dest_dir"><i class="bi bi-folder-symlink"></i> {{ task.dest_dir || '未设置' }}</span>
+                <span class="sync-summary-sep">|</span>
+                <span class="sync-summary-tag" v-if="task.cron"><i class="bi bi-clock"></i> {{ task.cron }}</span>
+                <span class="sync-summary-tag" v-if="task.match_mode && task.match_mode !== 'full_name'"><i class="bi bi-funnel"></i> {{ task.match_mode === 'name_only' ? '名称匹配' : 'MD5' }}</span>
+              </div>
+
+              <div class="task-card-body" v-show="task._expanded">
+                <div class="form-group row">
+                  <label class="col-sm-2 col-form-label">任务名称</label>
+                  <div class="col-sm-10">
+                    <input type="text" class="form-control" v-model="task.taskname" placeholder="请输入任务名称">
+                  </div>
+                </div>
+                <div class="form-group row">
+                  <label class="col-sm-2 col-form-label">源目录</label>
+                  <div class="col-sm-10">
+                    <div class="input-group">
+                      <input type="text" class="form-control" v-model="task.source_dir" placeholder="相对 datafiles/ 的路径">
+                      <div class="input-group-append">
+                        <button type="button" class="btn btn-outline-primary" @click="showSyncDirPicker(index, 'source_dir')"><i class="bi bi-folder2-open"></i></button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-group row">
+                  <label class="col-sm-2 col-form-label">目标目录</label>
+                  <div class="col-sm-10">
+                    <div class="input-group">
+                      <input type="text" class="form-control" v-model="task.dest_dir" placeholder="相对 datafiles/ 的路径">
+                      <div class="input-group-append">
+                        <button type="button" class="btn btn-outline-primary" @click="showSyncDirPicker(index, 'dest_dir')"><i class="bi bi-folder2-open"></i></button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-group row">
+                  <label class="col-sm-2 col-form-label">同步模式</label>
+                  <div class="col-sm-10">
+                    <select class="form-control" v-model="task.sync_mode">
+                      <option value="incremental">增量同步（仅复制新文件）</option>
+                      <option value="overwrite">覆盖同步（始终覆盖目标文件）</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-group row">
+                  <label class="col-sm-2 col-form-label">匹配模式</label>
+                  <div class="col-sm-10">
+                    <select class="form-control" v-model="task.match_mode">
+                      <option value="full_name">完整文件名匹配</option>
+                      <option value="name_only">文件名匹配（忽略扩展名）</option>
+                      <option value="md5">MD5 校验匹配</option>
+                    </select>
+                    <small class="form-text text-muted">
+                      <template v-if="task.match_mode === 'full_name'">基于完整文件名（含扩展名）判断文件是否已存在</template>
+                      <template v-else-if="task.match_mode === 'name_only'">忽略 .mp4/.mkv 等扩展名进行匹配，例如 01.mp4 和 01.mkv 视为同一文件</template>
+                      <template v-else-if="task.match_mode === 'md5'">基于文件内容 MD5 哈希值精确匹配（大文件可能较慢）</template>
+                    </small>
+                  </div>
+                </div>
+                <div class="form-group row">
+                  <label class="col-sm-2 col-form-label">运行周期</label>
+                  <div class="col-sm-10">
+                    <input type="text" class="form-control" v-model="task.cron" placeholder="Cron 表达式，例如: 0 2 * * *">
+                    <div class="cron-preset-group">
+                      <span class="cron-preset-btn" @click="task.cron = '0 2 * * *'">每天凌晨2点</span>
+                      <span class="cron-preset-btn" @click="task.cron = '0 */6 * * *'">每6小时</span>
+                      <span class="cron-preset-btn" @click="task.cron = '0 8,20 * * *'">每天8点和20点</span>
+                      <span class="cron-preset-btn" @click="task.cron = '0 3 * * 1'">每周一凌晨3点</span>
+                      <span class="cron-preset-btn" @click="task.cron = '*/30 * * * *'">每30分钟</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-group row">
+                  <label class="col-sm-2 col-form-label">文件过滤</label>
+                  <div class="col-sm-10">
+                    <input type="text" class="form-control" v-model="task.regex_filter" placeholder="正则表达式过滤文件名（留空表示全部）">
+                  </div>
+                </div>
+                <div class="form-group row">
+                  <label class="col-sm-2 col-form-label">类型过滤</label>
+                  <div class="col-sm-10">
+                    <div class="file-type-filter-group">
+                      <span class="filter-chip" :class="{active: task.file_type_filter && task.file_type_filter.includes('video')}" @click="toggleSyncFileType(task, 'video')"><i class="bi bi-film"></i> 视频</span>
+                      <span class="filter-chip" :class="{active: task.file_type_filter && task.file_type_filter.includes('audio')}" @click="toggleSyncFileType(task, 'audio')"><i class="bi bi-music-note"></i> 音频</span>
+                      <span class="filter-chip" :class="{active: task.file_type_filter && task.file_type_filter.includes('image')}" @click="toggleSyncFileType(task, 'image')"><i class="bi bi-image"></i> 图片</span>
+                      <span class="filter-chip" :class="{active: task.file_type_filter && task.file_type_filter.includes('document')}" @click="toggleSyncFileType(task, 'document')"><i class="bi bi-file-text"></i> 文档</span>
+                      <span class="filter-chip" :class="{active: task.file_type_filter && task.file_type_filter.includes('subtitle')}" @click="toggleSyncFileType(task, 'subtitle')"><i class="bi bi-badge-cc"></i> 字幕</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-group row">
+                  <label class="col-sm-2 col-form-label">选项</label>
+                  <div class="col-sm-10">
+                    <div class="custom-control custom-switch mb-1">
+                      <input type="checkbox" class="custom-control-input" :id="'syncEnabled_'+index" v-model="task.enabled">
+                      <label class="custom-control-label" :for="'syncEnabled_'+index">启用任务</label>
+                    </div>
+                    <div class="custom-control custom-switch mb-1">
+                      <input type="checkbox" class="custom-control-input" :id="'syncNotifyComplete_'+index" v-model="task.notify_on_complete">
+                      <label class="custom-control-label" :for="'syncNotifyComplete_'+index">完成后通知</label>
+                    </div>
+                    <div class="custom-control custom-switch mb-1">
+                      <input type="checkbox" class="custom-control-input" :id="'syncNotifyError_'+index" v-model="task.notify_on_error">
+                      <label class="custom-control-label" :for="'syncNotifyError_'+index">出错时通知</label>
+                    </div>
+                    <div class="custom-control custom-switch">
+                      <input type="checkbox" class="custom-control-input" :id="'syncExcludeEmpty_'+index" v-model="task.exclude_empty_dirs">
+                      <label class="custom-control-label" :for="'syncExcludeEmpty_'+index">排除空目录</label>
+                    </div>
+                  </div>
+                </div>
+                <!-- 操作栏 -->
+                <div class="sync-card-actions">
+                  <button type="button" class="btn btn-primary btn-sm" @click="runSyncTask(index)" :disabled="syncRunning[task.task_id]">
+                    <i class="bi" :class="syncRunning[task.task_id] ? 'bi-hourglass-split' : 'bi-play-fill'"></i>
+                    {{ syncRunning[task.task_id] ? '运行中...' : '立即执行' }}
+                  </button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" @click="showSyncRecords(task.task_id)">
+                    <i class="bi bi-clock-history"></i> 同步记录
+                  </button>
+                  <button type="button" class="btn btn-outline-warning btn-sm" v-if="syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'running'" @click="releaseSyncLock(task.task_id)">
+                    <i class="bi bi-unlock"></i> 释放锁
+                  </button>
+                  <button type="button" class="btn btn-outline-danger btn-sm ml-auto" @click="removeSyncTask(index)">
+                    <i class="bi bi-trash"></i> 删除
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 添加同步任务 -->
+            <div class="task-add-area">
+              <button type="button" class="btn btn-primary" @click="addSyncTask()"><i class="bi bi-plus"></i> 添加同步任务</button>
+            </div>
+          </div>
+
           <!-- Floating Action Bar -->
           <div class="bottom-buttons">
-            <button class="btn-save" data-toggle="tooltip" data-placement="top" title="保存 CTRL+S" @click="saveConfig()"><i class="bi bi-floppy2-fill"></i></button>
+            <button class="btn-save" data-toggle="tooltip" data-placement="top" title="保存 CTRL+S" @click="activeTab === 'sync' ? saveSyncTasks() : saveConfig()"><i class="bi bi-floppy2-fill"></i></button>
             <div class="action-separator"></div>
-            <button class="btn-run" data-toggle="tooltip" data-placement="top" title="运行 CTRL+R" @click="runScriptNow()"><i class="bi bi-play-fill"></i></button>
-            <div class="action-separator"></div>
+            <button class="btn-run" data-toggle="tooltip" data-placement="top" title="运行 CTRL+R" @click="runScriptNow()" v-show="activeTab !== 'sync'"><i class="bi bi-play-fill"></i></button>
+            <div class="action-separator" v-show="activeTab !== 'sync'"></div>
             <button class="btn-scroll" data-toggle="tooltip" data-placement="top" title="单击回顶，双击到底" @click="scrollToX(0)" @dblclick="scrollToX()"><i class="bi bi-chevron-bar-up"></i></button>
           </div>
         </form>
@@ -830,6 +1024,187 @@
       </div>
     </div>
 
+    <!-- 模态框 同步目录选择器 -->
+    <div class="modal" tabindex="-1" id="syncDirSelectModal">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-folder2-open"></i> 选择目录</h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body p-0">
+            <div class="sync-dir-picker">
+              <!-- 面包屑导航 -->
+              <div class="sync-dir-breadcrumb">
+                <span class="crumb" @click="browseSyncDir('')"><i class="bi bi-house-fill"></i> datafiles</span>
+                <template v-for="(crumb, ci) in syncDirSelect.breadcrumbs">
+                  <span class="separator">/</span>
+                  <span class="crumb" :class="{current: ci === syncDirSelect.breadcrumbs.length - 1}" @click="ci < syncDirSelect.breadcrumbs.length - 1 ? browseSyncDir(crumb.path) : null">{{ crumb.name }}</span>
+                </template>
+              </div>
+              <!-- 加载状态 -->
+              <div v-if="syncDirSelect.loading" class="text-center p-4">
+                <div class="spinner-border spinner-border-sm" role="status"></div>
+                <span class="ml-2 text-muted">加载中...</span>
+              </div>
+              <!-- 目录列表 -->
+              <div v-else class="dir-list">
+                <div v-if="syncDirSelect.fileList.length === 0" class="text-center p-4 text-muted">
+                  <i class="bi bi-folder-x d-block" style="font-size:2rem;opacity:0.3"></i>
+                  <small>当前目录为空</small>
+                </div>
+                <div v-for="item in syncDirSelect.fileList" :key="item.name" class="dir-item" @click="item.is_dir ? browseSyncDir((syncDirSelect.currentPath ? syncDirSelect.currentPath + '/' : '') + item.name) : null" :style="{cursor: item.is_dir ? 'pointer' : 'default'}">
+                  <i class="dir-icon bi" :class="item.is_dir ? 'bi-folder-fill' : 'bi-file-earmark file-icon'"></i>
+                  <span class="dir-name">{{ item.name }}</span>
+                  <span class="dir-meta" v-if="!item.is_dir">{{ item.size | size }}</span>
+                  <i v-if="item.is_dir" class="bi bi-chevron-right" style="color:var(--text-tertiary);font-size:0.8rem"></i>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary btn-sm" @click="selectSyncDir()">
+              <i class="bi bi-check2"></i> 选择当前文件夹
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 同步记录 -->
+    <div class="modal" tabindex="-1" id="syncRecordsModal">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-clock-history"></i> 同步记录</h5>
+            <div class="sync-records-view-toggle">
+              <button class="btn btn-sm" :class="syncRecords.viewMode === 'table' ? 'btn-primary' : 'btn-outline-secondary'" @click="switchSyncRecordsView('table')" title="列表视图"><i class="bi bi-list-ul"></i></button>
+              <button class="btn btn-sm" :class="syncRecords.viewMode === 'tree' ? 'btn-primary' : 'btn-outline-secondary'" @click="switchSyncRecordsView('tree')" title="树状视图"><i class="bi bi-diagram-3"></i></button>
+            </div>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body p-0">
+            <div v-if="syncRecords.loading" class="text-center p-4">
+              <div class="spinner-border spinner-border-sm" role="status"></div>
+              <span class="ml-2 text-muted">加载中...</span>
+            </div>
+            <div v-else-if="(syncRecords.viewMode === 'table' && syncRecords.records.length === 0) || (syncRecords.viewMode === 'tree' && syncRecords.treeData.length === 0)" class="text-center p-4 text-muted">
+              <i class="bi bi-inbox d-block" style="font-size:2rem;opacity:0.3"></i>
+              <small>暂无同步记录</small>
+            </div>
+
+            <!-- 列表视图 -->
+            <template v-else-if="syncRecords.viewMode === 'table'">
+              <div style="max-height:450px;overflow-y:auto">
+                <table class="sync-records-table">
+                  <thead>
+                    <tr>
+                      <th>文件路径</th>
+                      <th>大小</th>
+                      <th>同步时间</th>
+                      <th>状态</th>
+                      <th style="width:40px"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="rec in syncRecords.records" :key="rec.id">
+                      <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="rec.file_path">{{ rec.file_path || rec.file_name }}</td>
+                      <td style="white-space:nowrap">{{ rec.file_size | size }}</td>
+                      <td style="white-space:nowrap">{{ rec.sync_time | ts2date }}</td>
+                      <td><span class="status-badge" :class="rec.status">{{ rec.status === 'success' ? '成功' : rec.status === 'failed' ? '失败' : '跳过' }}</span></td>
+                      <td><button class="btn-icon-delete" @click="deleteSyncRecord(rec.id)" title="删除"><i class="bi bi-x-lg"></i></button></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div v-if="syncRecords.total > syncRecords.pageSize" class="sync-pagination">
+                <button @click="fetchSyncRecords(syncRecords.taskId, syncRecords.page - 1)" :disabled="syncRecords.page <= 1">&laquo; 上一页</button>
+                <span class="page-info">{{ syncRecords.page }} / {{ Math.ceil(syncRecords.total / syncRecords.pageSize) }}</span>
+                <button @click="fetchSyncRecords(syncRecords.taskId, syncRecords.page + 1)" :disabled="syncRecords.page >= Math.ceil(syncRecords.total / syncRecords.pageSize)">下一页 &raquo;</button>
+              </div>
+            </template>
+
+            <!-- 树状视图 -->
+            <template v-else-if="syncRecords.viewMode === 'tree'">
+              <div class="sync-tree-view" style="max-height:450px;overflow-y:auto">
+                <div class="sync-tree-summary">
+                  <small class="text-muted">共 {{ syncRecords.total }} 条记录</small>
+                  <div>
+                    <button class="btn btn-link btn-sm" @click="expandAllTreeNodes(true)">全部展开</button>
+                    <button class="btn btn-link btn-sm" @click="expandAllTreeNodes(false)">全部折叠</button>
+                  </div>
+                </div>
+                <div v-for="node in syncRecords.treeData" :key="node.path" class="sync-tree-node">
+                  <div v-if="node.type === 'dir'" class="sync-tree-dir" @click="toggleTreeNode(node.path)">
+                    <i class="bi" :class="syncRecords.treeExpanded[node.path] ? 'bi-caret-down-fill' : 'bi-caret-right-fill'" style="font-size:0.7rem"></i>
+                    <i class="bi" :class="syncRecords.treeExpanded[node.path] ? 'bi-folder2-open' : 'bi-folder2'" style="color:var(--apple-blue)"></i>
+                    <span class="sync-tree-dir-name">{{ node.name }}</span>
+                    <span class="sync-tree-dir-count">{{ node.fileCount }}</span>
+                  </div>
+                  <div v-show="syncRecords.treeExpanded[node.path]" v-if="node.type === 'dir'">
+                    <div v-for="file in node.children" :key="file.id" class="sync-tree-file">
+                      <i class="bi bi-file-earmark" style="color:var(--text-tertiary)"></i>
+                      <span class="sync-tree-file-name" :title="file.file_path">{{ file.file_name }}</span>
+                      <span class="sync-tree-file-size">{{ $options.filters.size(file.file_size) }}</span>
+                      <span class="status-badge" :class="file.status">{{ file.status === 'success' ? '成功' : file.status === 'failed' ? '失败' : '跳过' }}</span>
+                      <span class="sync-tree-file-time">{{ $options.filters.ts2date(file.sync_time) }}</span>
+                      <button class="btn-icon-delete" @click="deleteSyncRecord(file.id)" title="删除"><i class="bi bi-x-lg"></i></button>
+                    </div>
+                  </div>
+                  <div v-if="node.type === 'file'" class="sync-tree-file root-file">
+                    <i class="bi bi-file-earmark" style="color:var(--text-tertiary)"></i>
+                    <span class="sync-tree-file-name" :title="node.file_path">{{ node.file_name }}</span>
+                    <span class="sync-tree-file-size">{{ $options.filters.size(node.file_size) }}</span>
+                    <span class="status-badge" :class="node.status">{{ node.status === 'success' ? '成功' : node.status === 'failed' ? '失败' : '跳过' }}</span>
+                    <span class="sync-tree-file-time">{{ $options.filters.ts2date(node.sync_time) }}</span>
+                    <button class="btn-icon-delete" @click="deleteSyncRecord(node.id)" title="删除"><i class="bi bi-x-lg"></i></button>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+          <div class="modal-footer">
+            <div class="dropup mr-auto">
+              <button class="btn btn-outline-danger btn-sm dropdown-toggle" type="button" data-toggle="dropdown">
+                <i class="bi bi-trash"></i> 清理记录
+              </button>
+              <div class="dropdown-menu">
+                <a class="dropdown-item" href="#" @click.prevent="cleanupSyncRecords(syncRecords.taskId, 7)">清理 7 天前</a>
+                <a class="dropdown-item" href="#" @click.prevent="cleanupSyncRecords(syncRecords.taskId, 30)">清理 30 天前</a>
+                <div class="dropdown-divider"></div>
+                <a class="dropdown-item text-danger" href="#" @click.prevent="cleanupSyncRecords(syncRecords.taskId, null)">清理全部</a>
+              </div>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal">关闭</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 同步运行日志 -->
+    <div class="modal" tabindex="-1" id="syncLogModal">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><b>同步日志</b>
+              <div v-if="syncModalLoading" class="spinner-border spinner-border-sm m-1" role="status"></div>
+            </h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body" style="max-height: 500px; overflow-y: auto;">
+            <pre class="run-log" v-html="syncRunLog"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Toast 提示 -->
     <div class="toast-container">
       <div v-for="toast in toasts" :key="toast.id" class="toast show shadow-sm" :class="toast.type" role="alert" aria-live="assertive" aria-atomic="true">
@@ -960,10 +1335,55 @@
           currentMasked: '',
           saving: false,
         },
+        // ===== 数据同步 =====
+        syncTasks: [],
+        syncTaskStatus: {},
+        syncRunning: {},
+        syncRunLog: "",
+        syncModalLoading: false,
+        syncPollTimer: null,
+        newSyncTask: {
+          task_id: "",
+          taskname: "",
+          source_dir: "",
+          dest_dir: "",
+          sync_mode: "incremental",
+          match_mode: "full_name",
+          cron: "0 2 * * *",
+          enabled: true,
+          regex_filter: "",
+          file_type_filter: [],
+          exclude_empty_dirs: true,
+          notify_on_complete: true,
+          notify_on_error: true,
+          _expanded: true,
+        },
+        syncDirSelect: {
+          visible: false,
+          targetField: "",
+          targetIndex: null,
+          currentPath: "",
+          breadcrumbs: [],
+          fileList: [],
+          loading: false,
+        },
+        syncRecords: {
+          visible: false,
+          taskId: "",
+          records: [],
+          total: 0,
+          page: 1,
+          pageSize: 20,
+          loading: false,
+          viewMode: 'tree',
+          treeData: [],
+          treeExpanded: {},
+        },
       },
       filters: {
         ts2date: function (value) {
-          const date = new Date(value);
+          const ts = value < 1e12 ? value * 1000 : value;
+          const date = new Date(ts);
           return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()} ${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
         },
         size: function (value) {
@@ -1003,6 +1423,7 @@
       },
       beforeDestroy() {
         window.removeEventListener('beforeunload', this.handleBeforeUnload);
+        this.stopSyncPoll();
       },
       methods: {
         // 检查账户是否为受保护的 token 类型（阿里云盘/迅雷网盘且已填写 cookie）
@@ -1099,6 +1520,13 @@
           this.activeTab = tab;
           // Scroll to top smoothly when switching tabs
           window.scrollTo({ top: 0, behavior: 'smooth' });
+          // 数据同步 tab 切换时加载数据和启停轮询
+          if (tab === 'sync') {
+            this.fetchSyncTasks();
+            this.startSyncPoll();
+          } else {
+            this.stopSyncPoll();
+          }
         },
         checkNewVersion() {
           this.versionTips = this.version;
@@ -1187,10 +1615,16 @@
           if (event.ctrlKey || event.metaKey) {
             if (event.keyCode === 83 || event.key === 's') {
               event.preventDefault();
-              this.saveConfig();
+              if (this.activeTab === 'sync') {
+                this.saveSyncTasks();
+              } else {
+                this.saveConfig();
+              }
             } else if (event.keyCode === 82 || event.key === 'r') {
               event.preventDefault();
-              this.runScriptNow();
+              if (this.activeTab !== 'sync') {
+                this.runScriptNow();
+              }
             }
           }
         },
@@ -1957,6 +2391,359 @@
             }
           } catch (error) {
             console.error('Error querying QR code status:', error);
+          }
+        },
+        // ==================== 数据同步方法 ====================
+        generateTaskId() {
+          const ts = Date.now().toString(36);
+          const rand = Math.random().toString(36).substring(2, 8);
+          return (ts + rand).substring(0, 12);
+        },
+        fetchSyncTasks() {
+          axios.get('/api/sync/tasks')
+            .then(response => {
+              if (response.data.success) {
+                const data = response.data.data;
+                // 保持 _expanded 状态
+                const expandedMap = {};
+                this.syncTasks.forEach(t => { expandedMap[t.task_id] = t._expanded; });
+                this.syncTasks = (data.sync_tasks || []).map(t => {
+                  if (!t.hasOwnProperty('_expanded')) {
+                    t._expanded = expandedMap[t.task_id] !== undefined ? expandedMap[t.task_id] : false;
+                  } else {
+                    t._expanded = expandedMap[t.task_id] !== undefined ? expandedMap[t.task_id] : t._expanded;
+                  }
+                  if (!t.file_type_filter) t.file_type_filter = [];
+                  return t;
+                });
+                this.syncTaskStatus = data.task_status || {};
+              }
+            })
+            .catch(error => {
+              console.error('Error fetching sync tasks:', error);
+            });
+        },
+        // 仅获取任务状态，不覆盖任务配置（用于轮询）
+        fetchSyncStatus() {
+          axios.get('/api/sync/status')
+            .then(response => {
+              if (response.data.success) {
+                this.syncTaskStatus = response.data.data || {};
+              }
+            })
+            .catch(error => {
+              console.error('Error fetching sync status:', error);
+            });
+        },
+        saveSyncTasks() {
+          // 清理 _expanded 临时属性后保存
+          const tasksToSave = this.syncTasks.map(t => {
+            const copy = Object.assign({}, t);
+            delete copy._expanded;
+            return copy;
+          });
+          axios.post('/api/sync/tasks', { sync_tasks: tasksToSave })
+            .then(response => {
+              if (response.data.success) {
+                this.showToast('同步任务配置已保存', 'success');
+                this.fetchSyncTasks();
+              } else {
+                this.showToast(response.data.message || '保存失败', 'error');
+              }
+            })
+            .catch(error => {
+              this.showToast('保存失败: ' + error.message, 'error');
+            });
+        },
+        addSyncTask() {
+          const task = JSON.parse(JSON.stringify(this.newSyncTask));
+          task.task_id = this.generateTaskId();
+          task._expanded = true;
+          this.syncTasks.push(task);
+          this.$nextTick(() => {
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+          });
+        },
+        removeSyncTask(index) {
+          if (confirm('确定删除此同步任务？')) {
+            this.syncTasks.splice(index, 1);
+          }
+        },
+        toggleSyncFileType(task, type) {
+          if (!task.file_type_filter) {
+            this.$set(task, 'file_type_filter', []);
+          }
+          const idx = task.file_type_filter.indexOf(type);
+          if (idx >= 0) {
+            task.file_type_filter.splice(idx, 1);
+          } else {
+            task.file_type_filter.push(type);
+          }
+        },
+        getSyncTaskStatusClass(taskId) {
+          const status = this.syncTaskStatus[taskId];
+          if (!status) return 'idle';
+          if (status.status === 'running' || this.syncRunning[taskId]) return 'running';
+          if (status.last_run_result === 'error') return 'error';
+          return 'idle';
+        },
+        runSyncTask(index) {
+          const task = this.syncTasks[index];
+          if (!task || !task.task_id) return;
+          if (!task.source_dir || !task.dest_dir) {
+            this.showToast('请先配置源目录和目标目录', 'warning');
+            return;
+          }
+          // 先保存再执行
+          this.saveSyncTasks();
+
+          this.$set(this.syncRunning, task.task_id, true);
+          this.syncRunLog = "";
+          this.syncModalLoading = true;
+          $('#syncLogModal').modal('show');
+
+          fetch('/api/sync/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_id: task.task_id })
+          }).then(response => {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            const readChunk = () => {
+              reader.read().then(({ value, done }) => {
+                if (done) {
+                  this.syncModalLoading = false;
+                  this.$set(this.syncRunning, task.task_id, false);
+                  this.fetchSyncTasks();
+                  return;
+                }
+                const text = decoder.decode(value);
+                const lines = text.split('\n');
+                lines.forEach(line => {
+                  if (line.startsWith('data: ')) {
+                    const data = line.substring(6);
+                    if (data === '[DONE]' || data === '[TIMEOUT]') {
+                      this.syncModalLoading = false;
+                      this.$set(this.syncRunning, task.task_id, false);
+                      this.fetchSyncTasks();
+                    } else {
+                      this.syncRunLog += data + '\n';
+                    }
+                  }
+                });
+                // 自动滚动日志
+                this.$nextTick(() => {
+                  const logEl = document.querySelector('#syncLogModal .modal-body');
+                  if (logEl) logEl.scrollTop = logEl.scrollHeight;
+                });
+                readChunk();
+              });
+            };
+            readChunk();
+          }).catch(error => {
+            this.syncModalLoading = false;
+            this.$set(this.syncRunning, task.task_id, false);
+            this.showToast('执行失败: ' + error.message, 'error');
+          });
+        },
+        // 查看正在运行的同步日志
+        runSyncTask_viewLog(taskId) {
+          $('#syncLogModal').modal('show');
+        },
+        // 点击同步卡片头部：运行中任务打开日志，否则展开/折叠
+        handleSyncCardClick(task, index) {
+          const isRunning = this.syncRunning[task.task_id] || (this.syncTaskStatus[task.task_id] && this.syncTaskStatus[task.task_id].status === 'running');
+          if (!task._expanded && isRunning) {
+            $('#syncLogModal').modal('show');
+          } else {
+            task._expanded = !task._expanded;
+          }
+        },
+        // 目录选择器
+        showSyncDirPicker(index, field) {
+          this.syncDirSelect.targetIndex = index;
+          this.syncDirSelect.targetField = field;
+          const currentVal = this.syncTasks[index][field] || "";
+          this.browseSyncDir(currentVal);
+          $('#syncDirSelectModal').modal('show');
+        },
+        browseSyncDir(path) {
+          this.syncDirSelect.loading = true;
+          this.syncDirSelect.currentPath = path;
+          axios.get('/api/sync/browse', { params: { path: path } })
+            .then(response => {
+              if (response.data.success) {
+                const data = response.data.data;
+                this.syncDirSelect.fileList = data.list || [];
+                this.syncDirSelect.breadcrumbs = data.breadcrumbs || [];
+                this.syncDirSelect.currentPath = data.current_path || "";
+              } else {
+                this.showToast(response.data.message || '浏览目录失败', 'error');
+                this.syncDirSelect.fileList = [];
+              }
+            })
+            .catch(error => {
+              this.showToast('浏览目录失败: ' + error.message, 'error');
+              this.syncDirSelect.fileList = [];
+            })
+            .finally(() => {
+              this.syncDirSelect.loading = false;
+            });
+        },
+        selectSyncDir() {
+          const idx = this.syncDirSelect.targetIndex;
+          const field = this.syncDirSelect.targetField;
+          if (idx !== null && field) {
+            this.$set(this.syncTasks[idx], field, this.syncDirSelect.currentPath);
+          }
+          $('#syncDirSelectModal').modal('hide');
+        },
+        // 同步记录
+        showSyncRecords(taskId) {
+          this.syncRecords.taskId = taskId;
+          this.syncRecords.page = 1;
+          if (this.syncRecords.viewMode === 'tree') {
+            this.fetchSyncRecordsTree(taskId);
+          } else {
+            this.fetchSyncRecords(taskId, 1);
+          }
+          $('#syncRecordsModal').modal('show');
+        },
+        switchSyncRecordsView(mode) {
+          if (this.syncRecords.viewMode === mode) return;
+          this.syncRecords.viewMode = mode;
+          if (mode === 'tree') {
+            this.fetchSyncRecordsTree(this.syncRecords.taskId);
+          } else {
+            this.fetchSyncRecords(this.syncRecords.taskId, 1);
+          }
+        },
+        fetchSyncRecords(taskId, page) {
+          this.syncRecords.loading = true;
+          axios.get('/api/sync/records', { params: { task_id: taskId, page: page, page_size: this.syncRecords.pageSize } })
+            .then(response => {
+              if (response.data.success) {
+                const data = response.data.data;
+                this.syncRecords.records = data.records || [];
+                this.syncRecords.total = data.total || 0;
+                this.syncRecords.page = data.page || 1;
+              }
+            })
+            .catch(error => {
+              this.showToast('查询记录失败: ' + error.message, 'error');
+            })
+            .finally(() => {
+              this.syncRecords.loading = false;
+            });
+        },
+        fetchSyncRecordsTree(taskId) {
+          this.syncRecords.loading = true;
+          axios.get('/api/sync/records', { params: { task_id: taskId, view: 'tree' } })
+            .then(response => {
+              if (response.data.success) {
+                const data = response.data.data;
+                this.syncRecords.total = data.total || 0;
+                this.syncRecords.treeData = this.buildRecordTree(data.records || []);
+              }
+            })
+            .catch(error => {
+              this.showToast('查询记录失败: ' + error.message, 'error');
+            })
+            .finally(() => {
+              this.syncRecords.loading = false;
+            });
+        },
+        buildRecordTree(records) {
+          const dirs = {};
+          const rootFiles = [];
+          records.forEach(rec => {
+            const path = rec.file_path || rec.file_name;
+            const parts = path.replace(/\\/g, '/').split('/');
+            if (parts.length > 1) {
+              const dirPath = parts.slice(0, -1).join('/');
+              if (!dirs[dirPath]) {
+                dirs[dirPath] = { type: 'dir', path: dirPath, name: dirPath, children: [], fileCount: 0 };
+              }
+              dirs[dirPath].children.push(rec);
+              dirs[dirPath].fileCount++;
+            } else {
+              rootFiles.push({ type: 'file', ...rec });
+            }
+          });
+          const dirNodes = Object.values(dirs).sort((a, b) => a.name.localeCompare(b.name));
+          return [...dirNodes, ...rootFiles];
+        },
+        toggleTreeNode(path) {
+          this.$set(this.syncRecords.treeExpanded, path, !this.syncRecords.treeExpanded[path]);
+        },
+        expandAllTreeNodes(expand) {
+          const expanded = {};
+          if (expand) {
+            this.syncRecords.treeData.forEach(node => {
+              if (node.type === 'dir') expanded[node.path] = true;
+            });
+          }
+          this.syncRecords.treeExpanded = expanded;
+        },
+        deleteSyncRecord(recordId) {
+          if (!confirm('确定删除此条同步记录？')) return;
+          axios.post('/api/sync/record/delete', { record_id: recordId })
+            .then(response => {
+              if (response.data.success) {
+                this.showToast('记录已删除', 'success');
+                if (this.syncRecords.viewMode === 'tree') {
+                  this.fetchSyncRecordsTree(this.syncRecords.taskId);
+                } else {
+                  this.fetchSyncRecords(this.syncRecords.taskId, this.syncRecords.page);
+                }
+              } else {
+                this.showToast(response.data.message || '删除失败', 'error');
+              }
+            })
+            .catch(error => {
+              this.showToast('删除失败: ' + error.message, 'error');
+            });
+        },
+        cleanupSyncRecords(taskId, beforeDays) {
+          const label = beforeDays ? `${beforeDays} 天前的` : '全部';
+          if (!confirm(`确定清理${label}同步记录？`)) return;
+          axios.post('/api/sync/records/cleanup', { task_id: taskId, before_days: beforeDays })
+            .then(response => {
+              if (response.data.success) {
+                this.showToast(response.data.message, 'success');
+                this.fetchSyncRecords(taskId, 1);
+              } else {
+                this.showToast(response.data.message || '清理失败', 'error');
+              }
+            })
+            .catch(error => {
+              this.showToast('清理失败: ' + error.message, 'error');
+            });
+        },
+        releaseSyncLock(taskId) {
+          if (!confirm('确定强制释放任务锁？')) return;
+          axios.post('/api/sync/lock/release', { task_id: taskId })
+            .then(response => {
+              if (response.data.success) {
+                this.showToast('任务锁已释放', 'success');
+                this.fetchSyncTasks();
+              } else {
+                this.showToast(response.data.message || '释放失败', 'error');
+              }
+            });
+        },
+        startSyncPoll() {
+          this.stopSyncPoll();
+          this.syncPollTimer = setInterval(() => {
+            if (this.activeTab === 'sync') {
+              this.fetchSyncStatus();
+            }
+          }, 5000);
+        },
+        stopSyncPoll() {
+          if (this.syncPollTimer) {
+            clearInterval(this.syncPollTimer);
+            this.syncPollTimer = null;
           }
         },
       }

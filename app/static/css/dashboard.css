@@ -1785,3 +1785,789 @@ select:disabled {
     border: 1px solid #ddd;
   }
 }
+
+/* =====================
+   24. Sync Empty State
+   ===================== */
+.sync-empty-state {
+  text-align: center;
+  padding: 60px 24px;
+  color: var(--text-tertiary);
+}
+
+.sync-empty-state i {
+  font-size: 2.5rem;
+  opacity: 0.4;
+  margin-bottom: 12px;
+}
+
+.sync-empty-state p {
+  margin: 4px 0;
+}
+
+/* =====================
+   25. Sync Task Card
+   ===================== */
+.sync-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  background-color: var(--text-tertiary);
+}
+
+.sync-status-dot.running {
+  background-color: var(--apple-green);
+  box-shadow: 0 0 6px var(--apple-green);
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+.sync-status-dot.error {
+  background-color: var(--apple-red);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.sync-mode-badge {
+  font-size: 0.65rem;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  background-color: var(--apple-blue-light);
+  color: var(--apple-blue);
+}
+
+.sync-mode-badge.overwrite {
+  background-color: var(--apple-orange-light);
+  color: var(--apple-orange);
+}
+
+.sync-card-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-card-status .last-run {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+.task-info .last-run {
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.sync-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: var(--spacing-sm) 0 0;
+  margin-top: 0;
+  flex-wrap: wrap;
+}
+
+.sync-card-actions .btn {
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.sync-card-actions .btn-primary {
+  background: var(--apple-blue);
+  border-color: var(--apple-blue);
+}
+
+.sync-card-actions .btn-primary:hover:not(:disabled) {
+  background: var(--apple-blue-hover);
+  box-shadow: var(--shadow-blue-glow);
+}
+
+.sync-card-actions .ml-auto {
+  margin-left: auto;
+}
+
+/* =====================
+   Sync Card - Running State & Progress
+   ===================== */
+.sync-task-running {
+  border-color: rgba(0, 122, 255, 0.3);
+  box-shadow: 0 0 0 1px rgba(0, 122, 255, 0.1), var(--shadow-sm);
+}
+
+.sync-task-running .task-card-header {
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.04), rgba(52, 199, 89, 0.04));
+}
+
+.sync-running-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--apple-blue);
+  background: rgba(0, 122, 255, 0.1);
+  padding: 2px 8px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  animation: pulse-badge 2s ease-in-out infinite;
+}
+
+/* Sync Card Summary (collapsed) */
+.sync-card-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--spacing-lg) 8px;
+  border-top: 1px solid var(--separator-color);
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  flex-wrap: wrap;
+}
+
+.sync-summary-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-secondary);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  background: var(--bg-tertiary);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.sync-summary-item i {
+  color: var(--text-tertiary);
+  font-size: 0.65rem;
+}
+
+.sync-summary-arrow {
+  font-size: 0.6rem;
+  color: var(--text-tertiary);
+}
+
+.sync-summary-sep {
+  color: var(--separator-color);
+  font-size: 0.7rem;
+}
+
+.sync-summary-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Running progress bar */
+.sync-running-bar {
+  padding: 8px var(--spacing-lg) 10px;
+  border-top: 1px solid var(--separator-color);
+  background: linear-gradient(180deg, rgba(0, 122, 255, 0.03), transparent);
+}
+
+.sync-running-indicator {
+  height: 3px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.sync-running-progress {
+  height: 100%;
+  width: 40%;
+  background: linear-gradient(90deg, var(--apple-blue), var(--apple-green));
+  border-radius: 3px;
+  animation: sync-progress-slide 1.5s ease-in-out infinite;
+}
+
+@keyframes sync-progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+.sync-running-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.sync-running-text {
+  font-size: 0.75rem;
+  color: var(--apple-blue);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sync-view-log-btn {
+  font-size: 0.75rem;
+  padding: 0 4px;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.sync-view-log-btn:hover {
+  color: var(--apple-blue);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+/* =====================
+   26. Sync Form Layout (Apple Style)
+   ===================== */
+
+/* Grouped sections inside card body */
+.sync-form-section {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
+}
+
+.sync-form-section-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: var(--spacing-sm);
+  padding-left: 2px;
+}
+
+.sync-form-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--separator-color);
+}
+
+.sync-form-row:last-child {
+  border-bottom: none;
+}
+
+.sync-form-row .form-label-col {
+  min-width: 72px;
+  flex-shrink: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  padding-top: 5px;
+  text-align: right;
+}
+
+.sync-form-row .form-input-col {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Apple-style form controls */
+.sync-form-row .form-control,
+.sync-form-row .form-control-sm {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  padding: 6px 10px;
+  transition: all var(--transition-fast);
+  box-shadow: none;
+}
+
+.sync-form-row .form-control:focus,
+.sync-form-row .form-control-sm:focus {
+  border-color: var(--apple-blue);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+  outline: none;
+}
+
+.sync-form-row select.form-control {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238e8e93' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+/* Apple-style input group buttons */
+.sync-form-row .input-group .btn {
+  border-color: var(--border-color);
+  color: var(--apple-blue);
+  background: var(--bg-secondary);
+  transition: all var(--transition-fast);
+}
+
+.sync-form-row .input-group .btn:hover {
+  background: var(--apple-blue-light);
+  border-color: var(--apple-blue);
+}
+
+/* Apple-style switches */
+.sync-form-row .custom-switch {
+  padding-left: 2.5rem;
+}
+
+.sync-form-row .custom-switch .custom-control-label {
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding-top: 1px;
+}
+
+.sync-form-row .custom-switch .custom-control-label::before {
+  width: 36px;
+  height: 20px;
+  border-radius: 12px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color-strong);
+  top: 0.1rem;
+  left: -2.5rem;
+  transition: all var(--transition-normal);
+}
+
+.sync-form-row .custom-switch .custom-control-label::after {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  top: calc(0.1rem + 2px);
+  left: calc(-2.5rem + 2px);
+  transition: all var(--transition-normal);
+}
+
+.sync-form-row .custom-switch .custom-control-input:checked ~ .custom-control-label::before {
+  background-color: var(--apple-green);
+  border-color: var(--apple-green);
+}
+
+.sync-form-row .custom-switch .custom-control-input:checked ~ .custom-control-label::after {
+  transform: translateX(16px);
+}
+
+.match-mode-hint {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.cron-preset-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.cron-preset-btn {
+  font-size: 0.6875rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: 1px solid var(--border-color);
+}
+
+.cron-preset-btn:hover {
+  background: var(--apple-blue-light);
+  color: var(--apple-blue);
+  border-color: var(--apple-blue);
+}
+
+.file-type-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-chip {
+  font-size: 0.75rem;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  transition: all var(--transition-fast);
+  user-select: none;
+}
+
+.filter-chip:hover {
+  border-color: var(--apple-blue);
+}
+
+.filter-chip.active {
+  background: var(--apple-blue-light);
+  color: var(--apple-blue);
+  border-color: var(--apple-blue);
+}
+
+/* =====================
+   27. Sync Dir Picker
+   ===================== */
+.sync-dir-picker {
+  min-height: 200px;
+}
+
+.sync-dir-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--separator-color);
+  font-size: 0.8125rem;
+}
+
+.sync-dir-breadcrumb .crumb {
+  color: var(--apple-blue);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background var(--transition-fast);
+}
+
+.sync-dir-breadcrumb .crumb:hover {
+  background: var(--apple-blue-light);
+}
+
+.sync-dir-breadcrumb .crumb.current {
+  color: var(--text-primary);
+  cursor: default;
+  font-weight: 500;
+}
+
+.sync-dir-breadcrumb .crumb.current:hover {
+  background: transparent;
+}
+
+.sync-dir-breadcrumb .separator {
+  color: var(--text-tertiary);
+  margin: 0 2px;
+}
+
+.dir-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.dir-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 0.8125rem;
+  transition: background var(--transition-fast);
+  border-bottom: 1px solid var(--separator-color);
+}
+
+.dir-item:last-child {
+  border-bottom: none;
+}
+
+.dir-item:hover {
+  background: var(--bg-secondary);
+}
+
+.dir-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.dir-icon.bi-folder-fill {
+  color: var(--apple-orange);
+}
+
+.dir-icon.file-icon {
+  color: var(--text-tertiary);
+}
+
+.dir-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-meta {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+/* =====================
+   28. Sync Records Table
+   ===================== */
+.sync-records-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.sync-records-table th {
+  background: var(--bg-secondary);
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--separator-color);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.sync-records-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--separator-color);
+  color: var(--text-primary);
+}
+
+.sync-records-table tr:hover td {
+  background: var(--bg-secondary);
+}
+
+.status-badge {
+  font-size: 0.6875rem;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.status-badge.success {
+  background: var(--apple-green-light);
+  color: var(--apple-green);
+}
+
+.status-badge.failed {
+  background: var(--apple-red-light);
+  color: var(--apple-red);
+}
+
+.status-badge.skipped {
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+}
+
+/* =====================
+   29. Sync Pagination
+   ===================== */
+.sync-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--separator-color);
+  font-size: 0.8125rem;
+}
+
+.sync-pagination button {
+  padding: 3px 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  transition: all var(--transition-fast);
+}
+
+.sync-pagination button:hover:not(:disabled) {
+  background: var(--bg-secondary);
+  border-color: var(--apple-blue);
+  color: var(--apple-blue);
+}
+
+.sync-pagination button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sync-pagination .page-info {
+  color: var(--text-secondary);
+  min-width: 50px;
+  text-align: center;
+}
+
+/* =====================
+   30. Sync Records View Toggle & Delete
+   ===================== */
+.sync-records-view-toggle {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  margin-right: 12px;
+}
+
+.sync-records-view-toggle .btn {
+  padding: 2px 8px;
+  font-size: 0.8rem;
+}
+
+.btn-icon-delete {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 0.7rem;
+  border-radius: 4px;
+  transition: all var(--transition-fast);
+  line-height: 1;
+}
+
+.btn-icon-delete:hover {
+  color: var(--apple-red);
+  background: var(--apple-red-light);
+}
+
+/* =====================
+   31. Sync Tree View
+   ===================== */
+.sync-tree-view {
+  padding: 4px 0;
+}
+
+.sync-tree-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--separator-color);
+}
+
+.sync-tree-summary .btn-link {
+  font-size: 0.75rem;
+  padding: 0 6px;
+  color: var(--apple-blue);
+  text-decoration: none;
+}
+
+.sync-tree-dir {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  transition: background var(--transition-fast);
+  user-select: none;
+}
+
+.sync-tree-dir:hover {
+  background: var(--bg-secondary);
+}
+
+.sync-tree-dir-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.sync-tree-dir-count {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  padding: 0 6px;
+  border-radius: 8px;
+  margin-left: 2px;
+}
+
+.sync-tree-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 16px 5px 40px;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--separator-color);
+  transition: background var(--transition-fast);
+}
+
+.sync-tree-file:hover {
+  background: var(--bg-secondary);
+}
+
+.sync-tree-file.root-file {
+  padding-left: 16px;
+}
+
+.sync-tree-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.sync-tree-file-size {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.sync-tree-file-time {
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* =====================
+   30. Sync Responsive
+   ===================== */
+@media (max-width: 768px) {
+  .sync-form-row {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .sync-form-row .form-label-col {
+    text-align: left;
+    padding-top: 0;
+  }
+
+  .sync-card-actions {
+    justify-content: center;
+  }
+
+  .sync-dir-breadcrumb {
+    font-size: 0.75rem;
+  }
+
+  .sync-records-table th,
+  .sync-records-table td {
+    padding: 4px 8px;
+    font-size: 0.75rem;
+  }
+}

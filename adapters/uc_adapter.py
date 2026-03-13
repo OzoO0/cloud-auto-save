@@ -123,6 +123,7 @@ class UCAdapter(BaseCloudDriveAdapter):
         """获取分享文件详情"""
         list_merge = []
         page = 1
+        result = {}
 
         while True:
             url = f"{self.BASE_URL}/1/clouddrive/share/sharepage/detail"
@@ -164,12 +165,12 @@ class UCAdapter(BaseCloudDriveAdapter):
                 logging.error(f"[UC] 获取分享详情失败: {e}")
                 return {"code": 1, "message": f"获取分享详情失败: {e}", "data": {"list": []}}
 
-        return {
-            "code": 0,
-            "message": "success",
-            "data": {"list": list_merge},
-            "metadata": {"_total": len(list_merge)},
-        }
+        # 保留完整的API响应（包含full_path等字段），仅替换合并后的文件列表
+        if result.get("data"):
+            result["data"]["list"] = list_merge
+        else:
+            result["data"] = {"list": list_merge}
+        return result
 
     def ls_dir(self, pdir_fid: str, **kwargs) -> Dict:
         """列出目录内容"""

@@ -25,6 +25,8 @@ import hashlib
 import logging
 import traceback
 import base64
+import queue
+import threading
 import sys
 import os
 import re
@@ -119,6 +121,11 @@ TASK_TIMEOUT = int(os.environ.get("TASK_TIMEOUT", 1800))
 
 config_data = {}
 task_plugins_config_default = {}
+
+# 数据同步模块
+sync_db = None
+sync_manager = None
+DATAFILES_DIR = os.environ.get("DATAFILES_DIR", "./datafiles")
 
 app = Flask(__name__)
 app.config["APP_VERSION"] = get_app_ver()
@@ -347,7 +354,7 @@ def update():
         return jsonify({"success": False, "message": "未登录"})
     config_data = Config.read_json(CONFIG_PATH)
 
-    dont_save_keys = ["task_plugins_config_default", "api_token"]
+    dont_save_keys = ["task_plugins_config_default", "api_token", "sync_tasks"]
     
     # 处理阿里云盘/迅雷网盘 refresh_token 保护
     # 对于这两种网盘类型，一旦配置了 cookie，就只能通过专门的刷新接口更新
@@ -1010,6 +1017,276 @@ def add_task():
     )
 
 
+
+# ==================== 数据同步 API ====================
+
+@app.route("/api/sync/tasks", methods=["GET"])
+def get_sync_tasks():
+    """获取同步任务配置和状态"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    try:
+        sync_tasks = config_data.get("sync_tasks", [])
+        task_status = sync_db.get_all_task_status() if sync_db else {}
+        return jsonify({
+            "success": True,
+            "data": {
+                "sync_tasks": sync_tasks,
+                "task_status": task_status,
+            }
+        })
+    except Exception as e:
+        logging.error(f">>> 获取同步任务失败: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/sync/status", methods=["GET"])
+def get_sync_status():
+    """仅获取同步任务运行状态（轻量轮询接口，不返回任务配置）"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    try:
+        task_status = sync_db.get_all_task_status() if sync_db else {}
+        return jsonify({"success": True, "data": {"task_status": task_status}})
+    except Exception as e:
+        logging.error(f">>> 获取同步状态失败: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/sync/tasks", methods=["POST"])
+def save_sync_tasks():
+    """保存同步任务配置"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    try:
+        sync_tasks = request.json.get("sync_tasks", [])
+        config_data["sync_tasks"] = sync_tasks
+        Config.write_json(CONFIG_PATH, config_data)
+        # 重载同步调度
+        if sync_manager:
+            sync_manager.reload_sync_tasks(sync_tasks)
+        logging.info(f">>> 同步任务配置已保存 ({len(sync_tasks)} 个任务)")
+        return jsonify({"success": True, "message": "同步任务配置已保存"})
+    except Exception as e:
+        logging.error(f">>> 保存同步任务失败: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/sync/run", methods=["POST"])
+def sync_run():
+    """立即执行同步任务（SSE 流式日志）"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_manager:
+        return jsonify({"success": False, "message": "数据同步模块未初始化"})
+
+    task_id = request.json.get("task_id", "")
+    # 从配置中查找任务
+    sync_tasks = config_data.get("sync_tasks", [])
+    task_config = None
+    for t in sync_tasks:
+        if t.get("task_id") == task_id:
+            task_config = t
+            break
+
+    if not task_config:
+        return jsonify({"success": False, "message": f"未找到任务: {task_id}"})
+
+    log_queue = queue.Queue()
+
+    def log_callback(msg):
+        log_queue.put(msg)
+
+    def run_in_thread():
+        try:
+            sync_manager.run_task_now(task_config, log_callback=log_callback)
+        except Exception as e:
+            log_queue.put(f"任务执行异常: {e}")
+        finally:
+            log_queue.put("[DONE]")
+
+    thread = threading.Thread(target=run_in_thread, daemon=True)
+    thread.start()
+
+    def generate_output():
+        while True:
+            try:
+                msg = log_queue.get(timeout=TASK_TIMEOUT)
+                if msg == "[DONE]":
+                    yield "data: [DONE]\n\n"
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                yield "data: [TIMEOUT]\n\n"
+                break
+
+    return Response(
+        stream_with_context(generate_output()),
+        content_type="text/event-stream;charset=utf-8",
+    )
+
+
+@app.route("/api/sync/records", methods=["GET"])
+def get_sync_records():
+    """查询同步记录（支持分页和树状全量两种模式）"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据同步模块未初始化"})
+
+    task_id = request.args.get("task_id", "")
+    view = request.args.get("view", "table")
+
+    try:
+        if view == "tree":
+            # 树状视图：返回全量记录（按路径排序，带上限）
+            records = sync_db.get_all_sync_records(task_id)
+            total = sync_db.get_records_count(task_id)
+            return jsonify({
+                "success": True,
+                "data": {
+                    "records": records,
+                    "total": total,
+                }
+            })
+        else:
+            # 列表视图：分页返回
+            page = int(request.args.get("page", 1))
+            page_size = int(request.args.get("page_size", 20))
+            records = sync_db.get_sync_records(task_id, page, page_size)
+            total = sync_db.get_records_count(task_id)
+            return jsonify({
+                "success": True,
+                "data": {
+                    "records": records,
+                    "total": total,
+                    "page": page,
+                    "page_size": page_size,
+                }
+            })
+    except Exception as e:
+        logging.error(f">>> 查询同步记录失败: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/sync/records/cleanup", methods=["POST"])
+def cleanup_sync_records():
+    """清理同步记录"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据同步模块未初始化"})
+
+    task_id = request.json.get("task_id", "")
+    before_days = request.json.get("before_days")  # None 表示全部清理
+
+    try:
+        deleted = sync_db.cleanup_records(task_id, before_days)
+        return jsonify({
+            "success": True,
+            "message": f"已清理 {deleted} 条记录",
+            "data": {"deleted": deleted}
+        })
+    except Exception as e:
+        logging.error(f">>> 清理同步记录失败: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/sync/record/delete", methods=["POST"])
+def delete_sync_record():
+    """删除单条同步记录"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据同步模块未初始化"})
+
+    record_id = request.json.get("record_id")
+    if record_id is None:
+        return jsonify({"success": False, "message": "缺少 record_id 参数"})
+
+    try:
+        ok = sync_db.delete_sync_record(record_id)
+        if ok:
+            return jsonify({"success": True, "message": "记录已删除"})
+        else:
+            return jsonify({"success": False, "message": "记录不存在或删除失败"})
+    except Exception as e:
+        logging.error(f">>> 删除同步记录失败: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/sync/browse", methods=["GET"])
+def sync_browse():
+    """浏览 datafiles 目录树"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+
+    rel_path = request.args.get("path", "")
+    datafiles_real = os.path.realpath(DATAFILES_DIR)
+
+    # 安全校验
+    target = os.path.realpath(os.path.join(datafiles_real, rel_path))
+    if not target.startswith(datafiles_real):
+        return jsonify({"success": False, "message": "路径安全校验失败"})
+
+    if not os.path.isdir(target):
+        return jsonify({"success": False, "message": f"目录不存在: {rel_path}"})
+
+    try:
+        items = []
+        for name in sorted(os.listdir(target)):
+            full = os.path.join(target, name)
+            try:
+                stat = os.stat(full)
+                items.append({
+                    "name": name,
+                    "is_dir": os.path.isdir(full),
+                    "size": stat.st_size if not os.path.isdir(full) else 0,
+                    "mtime": stat.st_mtime,
+                })
+            except OSError:
+                continue
+
+        # 构建面包屑
+        breadcrumbs = []
+        if rel_path:
+            parts = rel_path.replace("\\", "/").strip("/").split("/")
+            for i, part in enumerate(parts):
+                breadcrumbs.append({
+                    "name": part,
+                    "path": "/".join(parts[:i + 1]),
+                })
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "list": items,
+                "current_path": rel_path,
+                "breadcrumbs": breadcrumbs,
+            }
+        })
+    except Exception as e:
+        logging.error(f">>> 浏览目录失败: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/sync/lock/release", methods=["POST"])
+def sync_release_lock():
+    """强制释放任务锁"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据同步模块未初始化"})
+
+    task_id = request.json.get("task_id", "")
+    try:
+        sync_db.force_release_lock(task_id)
+        return jsonify({"success": True, "message": "任务锁已释放"})
+    except Exception as e:
+        logging.error(f">>> 释放任务锁失败: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
 # 定时任务执行的函数
 def run_python(args):
     logging.info(f">>> 定时运行任务")
@@ -1052,7 +1329,10 @@ def reload_tasks():
         if scheduler.state == 1:
             scheduler.pause()  # 暂停调度器
         trigger = CronTrigger.from_crontab(crontab)
-        scheduler.remove_all_jobs()
+        # 仅移除非同步任务的 jobs（保留 sync_ 前缀的调度）
+        for job in scheduler.get_jobs():
+            if not job.id.startswith("sync_"):
+                scheduler.remove_job(job.id)
         scheduler.add_job(
             run_python,
             trigger=trigger,
@@ -1138,10 +1418,38 @@ def init():
         except Exception as e:
             logging.warning(f">>> 初始化迅雷网盘 token 保存器失败: {e}")
 
+    # 初始化数据同步模块
+    global sync_db, sync_manager
+    try:
+        from sync import SyncDB, SyncSchedulerManager
+        db_path = os.path.join(os.path.dirname(CONFIG_PATH), "sync_records.db")
+        sync_db = SyncDB(db_path)
+        datafiles_abs = os.path.realpath(DATAFILES_DIR)
+        if not os.path.exists(datafiles_abs):
+            os.makedirs(datafiles_abs)
+        sync_manager = SyncSchedulerManager(
+            scheduler=scheduler,
+            db=sync_db,
+            base_dir=datafiles_abs,
+            config_getter=lambda: config_data,
+        )
+        logging.info(f">>> 数据同步模块已初始化 (datafiles={datafiles_abs})")
+    except Exception as e:
+        logging.warning(f">>> 初始化数据同步模块失败: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 if __name__ == "__main__":
     init()
     reload_tasks()
+    # 加载数据同步调度
+    if sync_manager:
+        try:
+            sync_tasks = config_data.get("sync_tasks", [])
+            sync_manager.reload_sync_tasks(sync_tasks)
+        except Exception as e:
+            logging.warning(f">>> 加载数据同步调度失败: {e}")
     logging.info(">>> 启动Web服务")
     logging.info(f"运行在: http://{HOST}:{PORT}")
     app.run(
