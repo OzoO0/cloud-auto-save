@@ -168,7 +168,7 @@ class QuarkAdapter(BaseCloudDriveAdapter):
         response["data"]["list"] = list_merge
         return response
 
-    def ls_dir(self, pdir_fid: str, **kwargs) -> Dict:
+    def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
         """列出目录内容"""
         list_merge = []
         page = 1
@@ -195,6 +195,10 @@ class QuarkAdapter(BaseCloudDriveAdapter):
                 list_merge += response["data"]["list"]
                 page += 1
             else:
+                break
+            # max_items 限量：达到上限后提前终止分页
+            if max_items > 0 and len(list_merge) >= max_items:
+                list_merge = list_merge[:max_items]
                 break
             if len(list_merge) >= response["metadata"]["_total"]:
                 break

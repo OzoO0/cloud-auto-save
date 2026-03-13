@@ -571,7 +571,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
         except:
             return 0
 
-    def ls_dir(self, pdir_fid: str, **kwargs) -> Dict:
+    def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
         """列出用户网盘目录内容"""
         if not self._ensure_token_valid():
             return {"code": 1, "message": "Token 无效", "data": {"list": []}}
@@ -614,6 +614,11 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                     file_info = self._convert_item(item)
                     file_list.append(file_info)
                 
+                # max_items 限量：达到上限后提前终止分页
+                if max_items > 0 and len(file_list) >= max_items:
+                    file_list = file_list[:max_items]
+                    break
+
                 marker = data.get("next_marker", "")
                 if not marker:
                     break

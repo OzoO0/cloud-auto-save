@@ -65,6 +65,14 @@
   - [x] 追更或整理后自动刷新 Emby 媒体库
   - [x] 插件模块化，允许自行开发和挂载[插件](./plugins)
 
+- 数据同步
+  - [x] 本地目录间文件同步(支持WebDav/FTP等本地挂载之后使用)
+  - [x] 支持增量同步和覆盖同步两种模式
+  - [x] 支持文件名/去扩展名/MD5 多种匹配模式
+  - [x] 支持正则过滤和文件类型过滤
+  - [x] 支持定时调度执行
+  - [x] MD5 缓存加速，大文件快速指纹优化
+
 - 其它
   - [x] 每日签到领空间 <sup>[?](https://github.com/ozoo0/cloud-auto-save/wiki/使用技巧集锦#每日签到领空间)</sup>
   - [x] 支持多个通知推送渠道 <sup>[?](https://github.com/ozoo0/cloud-auto-save/wiki/通知推送服务配置)</sup>
@@ -84,6 +92,8 @@ docker run -d \
   -e WEBUI_PASSWORD=admin123 \
   -v ./cloud-auto-save/config:/app/config \ # 必须，配置持久化
   -v ./cloud-auto-save/media:/media \ # 可选，模块alist_strm_gen生成strm使用
+  -v /mnt/cloud-drive:/app/datafiles/source \ # 可选，数据同步功能使用，映射网盘目录
+  -v /mnt/local-storage:/app/datafiles/dest \ # 可选，数据同步功能使用，映射本地目录
   --network bridge \
   --restart unless-stopped \
   ozoo0/cloud-auto-save:latest
@@ -108,6 +118,8 @@ services:
     volumes:
       - ./cloud-auto-save/config:/app/config
       - ./cloud-auto-save/media:/media
+      - /mnt/cloud-drive:/app/datafiles/source  # 可选，数据同步功能使用，网盘挂载点
+      - /mnt/local-storage:/app/datafiles/dest  # 可选，数据同步功能使用，本地存储目录
 ```
 
 管理地址：http://yourhost:5005
@@ -119,6 +131,35 @@ services:
 | `PORT`           | `5005`     | 管理后台端口                             |
 | `PLUGIN_FLAGS`   |            | 插件标志，如 `-emby,-aria2` 禁用某些插件 |
 | `TASK_TIMEOUT`   | `1800`     | 任务执行超时时间（秒），超时则任务结束   |
+
+**数据同步目录映射说明：**
+
+如需使用数据同步功能，需要额外映射 `datafiles` 目录：
+
+| 挂载点 | 说明 |
+|--------|------|
+| `/app/datafiles` | 数据同步的基础目录，源目录和目标目录均相对于此路径配置 |
+
+**示例场景：**
+
+1. **网盘挂载同步到本地存储**
+   ```yaml
+   volumes:
+     - ./config:/app/config
+     - /mnt/cloud-drive:/app/datafiles/source  # 网盘挂载点
+     - /mnt/local-storage:/app/datafiles/dest  # 本地存储目录
+   ```
+   配置同步任务时：
+   - 源目录：`source`
+   - 目标目录：`dest`
+
+2. **多目录同步**
+   ```yaml
+   volumes:
+     - ./config:/app/config
+     - ./datafiles:/app/datafiles  # 统一挂载父目录
+   ```
+   在宿主机 `./datafiles/` 下创建子目录（如 `src1`, `src2`, `dest`），配置时填写相对路径即可。
 
 #### 一键更新
 
@@ -157,6 +198,47 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtow
 > 自 v0.6.0 开始，支持更多以 {} 包裹的我称之为“魔法变量”，可以更灵活地进行重命名。
 >
 > 更多说明请看[魔法匹配和魔法变量](https://github.com/ozoo0/cloud-auto-save/wiki/魔法匹配和魔法变量)
+
+### 数据同步
+
+支持本地目录间的文件同步功能，适用于网盘挂载目录与本地存储之间的数据同步。
+
+**同步模式：**
+
+| 模式 | 说明 |
+|------|------|
+| `增量同步` | 跳过已同步的文件，只同步新文件 |
+| `覆盖同步` | 始终同步所有文件，覆盖已存在的文件 |
+
+**匹配模式：**
+
+| 模式 | 说明 |
+|------|------|
+| `文件名匹配` | 根据完整文件名（含扩展名）判断文件是否已存在 |
+| `去扩展名匹配` | 根据文件名（不含扩展名）判断文件是否已存在 |
+| `MD5 匹配` | 根据文件 MD5 值判断文件是否已存在，可识别重命名文件 |
+
+**配置参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `源目录` | 同步来源目录的相对路径（相对于 `datafiles/`） |
+| `目标目录` | 同步目标目录的相对路径（相对于 `datafiles/`） |
+| `正则过滤` | 可选，只同步匹配正则表达式的文件 |
+| `文件类型` | 可选，只同步指定类型的文件（视频/音频/图片/文档/字幕） |
+| `排除空目录` | 扫描时跳过没有文件的空目录 |
+| `MD5 缓存` | 启用 MD5 缓存加速，避免重复计算 |
+| `快速指纹阈值` | 大文件使用快速指纹（采样头部/中部/尾部）代替完整 MD5 |
+| `并发数` | MD5 计算的并发工作线程数 |
+
+**使用示例：**
+
+同步网盘挂载目录到本地存储：
+- 源目录：`test_src`
+- 目标目录：`test_dest`
+- 同步模式：`增量同步`
+- 匹配模式：`文件名匹配`
+- 文件类型：`视频`
 
 ### 刷新媒体库
 

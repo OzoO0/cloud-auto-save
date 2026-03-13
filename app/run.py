@@ -68,6 +68,12 @@ try:
 except ImportError:
     MULTI_DRIVE_SUPPORT = False
 
+# 导入应用级缓存模块
+from utils.cache import (
+    make_cache_key, get_cached_fids, set_cached_fids,
+    get_cached_lsdir, set_cached_lsdir, invalidate_all
+)
+
 print(
     r"""
    ____    ___   _____
@@ -187,9 +193,9 @@ def get_account_by_name(account_name=None):
         enabled_accounts = [acc for acc in accounts if acc.get("enabled", True)]
         
         if not enabled_accounts:
-            # 无可用账户，回退到旧格式
+            # 无可用账户，回退到旧格式（通过工厂缓存复用实例）
             if config_data.get("cookie"):
-                return Quark(config_data["cookie"][0]), "quark"
+                return AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0), "quark"
             return None, None
         
         # 查找指定账户或默认账户
@@ -218,12 +224,12 @@ def get_account_by_name(account_name=None):
         if adapter:
             return adapter, drive_type
         
-        # 工厂创建失败，回退到默认
-        return QuarkAdapter(cookie), "quark"
+        # 工厂创建失败，回退到默认（通过工厂缓存复用实例）
+        return AdapterFactory.create_adapter("quark", cookie, 0), "quark"
     
-    # 旧格式兼容
+    # 旧格式兼容（通过工厂缓存复用实例）
     if config_data.get("cookie"):
-        return Quark(config_data["cookie"][0]), "quark"
+        return AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0), "quark"
     
     return None, None
 
@@ -240,7 +246,7 @@ def get_adapter_for_url(shareurl):
     """
     if not MULTI_DRIVE_SUPPORT:
         if config_data.get("cookie"):
-            return Quark(config_data["cookie"][0]), "quark"
+            return AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0), "quark"
         return None, None
     
     # 根据 URL 判断网盘类型
@@ -251,7 +257,7 @@ def get_adapter_for_url(shareurl):
         logging.warning(f">>> 无法识别的分享链接类型: {shareurl}")
         # 尝试回退到旧格式的夸克
         if config_data.get("cookie"):
-            return Quark(config_data["cookie"][0]), "quark"
+            return AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0), "quark"
         return None, None
     
     # 从账户中查找对应类型的可用账户
@@ -273,7 +279,7 @@ def get_adapter_for_url(shareurl):
     # 回退到旧格式
     if drive_type == "quark" and config_data.get("cookie"):
         logging.info(f">>> 回退到旧格式Cookie配置")
-        return Quark(config_data["cookie"][0]), "quark"
+        return AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0), "quark"
     
     logging.warning(f">>> 未找到 {drive_type} 类型的可用账户")
     return None, None
@@ -395,6 +401,7 @@ def update():
     # 配置变更时清空适配器实例缓存，确保新配置生效
     if MULTI_DRIVE_SUPPORT:
         AdapterFactory.clear_cache()
+    invalidate_all()  # 同步清空应用级预览缓存
     # 重新加载任务
     if reload_tasks():
         logging.info(f">>> 配置更新成功")
@@ -527,7 +534,7 @@ def get_task_suggestions():
 
 @app.route("/get_share_detail", methods=["POST"])
 def get_share_detail():
-    """获取分享详情接口，支持正则预览处理"""
+    """获取分享详情接口，支持正则预览处理（串行复用连接 + 三层缓存）"""
     logger.debug(f"[get_share_detail] 收到请求")
     
     if not is_login():
@@ -535,6 +542,7 @@ def get_share_detail():
         return jsonify({"success": False, "message": "未登录"})
     
     try:
+        # 提前提取所有请求参数（避免子线程访问 Flask request 上下文）
         shareurl = request.json.get("shareurl", "")
         stoken = request.json.get("stoken", "")
         account_name = request.json.get("account_name", "")
@@ -553,7 +561,6 @@ def get_share_detail():
             logger.debug(f"[get_share_detail] 自动检测账户类型：{drive_type}")
         
         if not account:
-            # 检测 URL 类型以提供更详细的错误信息
             detected_type = AdapterFactory.get_drive_type_by_url(shareurl) if MULTI_DRIVE_SUPPORT else "quark"
             type_label = {"quark": "夸克网盘", "115": "115 网盘"}.get(detected_type, detected_type)
             logger.error(f"[get_share_detail] 未配置{type_label}账户")
@@ -561,23 +568,102 @@ def get_share_detail():
         
         pwd_id, passcode, pdir_fid, paths = account.extract_url(shareurl)
         logger.debug(f"[get_share_detail] 解析分享链接：pwd_id={pwd_id}, pdir_fid={pdir_fid}")
-                
-        if not stoken:
-            logger.debug(f"[get_share_detail] stoken 为空，开始获取")
-            get_stoken = account.get_stoken(pwd_id, passcode)
-            if get_stoken.get("status") == 200:
-                stoken = get_stoken["data"]["stoken"]
-                logger.debug(f"[get_share_detail] stoken 获取成功")
-            else:
-                logger.error(f"[get_share_detail] stoken 获取失败：{get_stoken.get('message')}")
-                return jsonify(
-                    {"success": False, "data": {"error": get_stoken.get("message")}}
-                )
-        share_detail = account.get_detail(
-            pwd_id, stoken, pdir_fid, _fetch_share=1, fetch_share_full_path=1
-        )
-        logger.debug(f"[get_share_detail] 获取分享详情，文件数量：{len(share_detail.get('data', {}).get('list', []))}")
+        
+        # ── 判断是否需要预览 ──
+        need_preview = bool(task)
+        savepath = task.get("savepath", "") if task else ""
+        
+        # 解析预览账户（主线程完成，避免线程竞态）
+        preview_account = None
+        if need_preview and savepath:
+            task_account_name = task.get("account_name", "")
+            if task_account_name and task_account_name != "auto":
+                preview_account, _ = get_account_by_name(task_account_name)
+            if not preview_account:
+                preview_account = account
+            if not preview_account:
+                if config_data.get("cookie"):
+                    preview_account = AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0)
+        
+        # ── 定义两个并行任务 ──
+        def fetch_share_data():
+            """线程 A：获取分享详情（stoken → get_detail）"""
+            nonlocal stoken
+            if not stoken:
+                get_stoken = account.get_stoken(pwd_id, passcode)
+                if get_stoken.get("status") == 200:
+                    stoken = get_stoken["data"]["stoken"]
+                else:
+                    return {"error": get_stoken.get("message", "获取 stoken 失败")}
+            
+            share_detail = account.get_detail(
+                pwd_id, stoken, pdir_fid, _fetch_share=1, fetch_share_full_path=1
+            )
+            logger.debug(f"[fetch_share] 获取分享详情，文件数量：{len(share_detail.get('data', {}).get('list', []))}")
+            return {"share_detail": share_detail, "stoken": stoken}
+        
+        def fetch_dir_data():
+            """线程 B：获取目标目录文件列表（缓存命中直接返回，否则走原始 API）"""
+            if not preview_account or not savepath:
+                return []
+            
+            savepath_normalized = re.sub(r'/+', '/', savepath)
+            try:
+                drive_type_key = getattr(preview_account, 'DRIVE_TYPE', 'quark')
+                cookie_key = getattr(preview_account, 'cookie', '')
 
+                # 优先读缓存（不阻塞）
+                fid = preview_account.savepath_fid.get(savepath_normalized)
+                if not fid:
+                    fids_cache_key = make_cache_key(drive_type_key, cookie_key, 'fids', savepath_normalized)
+                    fid = get_cached_fids(fids_cache_key)
+
+                if fid:
+                    lsdir_cache_key = make_cache_key(drive_type_key, cookie_key, 'lsdir', str(fid))
+                    cached_ls = get_cached_lsdir(lsdir_cache_key)
+                    if cached_ls is not None:
+                        logger.debug(f"[fetch_dir] 缓存命中，{len(cached_ls)} 个文件")
+                        return cached_ls
+
+                # 无缓存：走原始 API 获取 fid + 目录列表
+                if not fid:
+                    get_fids_result = preview_account.get_fids([savepath_normalized])
+                    if get_fids_result:
+                        fid = get_fids_result[0]["fid"]
+                        fids_cache_key = make_cache_key(drive_type_key, cookie_key, 'fids', savepath_normalized)
+                        set_cached_fids(fids_cache_key, fid)
+
+                if fid:
+                    ls_result = preview_account.ls_dir(fid, max_items=2000)
+                    if ls_result and "data" in ls_result:
+                        dir_list = ls_result["data"].get("list", [])
+                        lsdir_cache_key = make_cache_key(drive_type_key, cookie_key, 'lsdir', str(fid))
+                        set_cached_lsdir(lsdir_cache_key, dir_list)
+                        logger.debug(f"[fetch_dir] API 获取目录，{len(dir_list)} 个文件")
+                        return dir_list
+            except Exception as e:
+                logger.warning(f"[fetch_dir] 获取目标目录失败：{e}")
+            return []
+        
+        # ── 并行执行：分享详情 & 目录查询同时进行 ──
+        if need_preview and savepath and preview_account:
+            logger.debug(f"[get_share_detail] 并行获取：分享详情 + 目录列表")
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_share = executor.submit(fetch_share_data)
+                future_dir = executor.submit(fetch_dir_data)
+                share_result = future_share.result(timeout=60)
+                dir_file_list = future_dir.result(timeout=60)
+        else:
+            share_result = fetch_share_data()
+            dir_file_list = []
+        
+        # ── 处理分享数据 ──
+        if "error" in share_result:
+            return jsonify({"success": False, "data": {"error": share_result["error"]}})
+        
+        share_detail = share_result["share_detail"]
+        stoken = share_result["stoken"]
+        
         if share_detail.get("code") != 0:
             logger.error(f"[get_share_detail] 分享详情获取失败：{share_detail.get('message')}")
             return jsonify(
@@ -590,127 +676,138 @@ def get_share_detail():
             for i in share_detail["data"].get("full_path", [])
         ] or paths
         data["stoken"] = stoken
-        data["drive_type"] = drive_type  # 返回网盘类型供前端使用
+        data["drive_type"] = drive_type
         logger.debug(f"[get_share_detail] 分享详情获取成功，路径：{'/'.join([p['name'] for p in data['paths']])}")
 
-        # 正则处理预览
-        def preview_regex(data, share_account=None):
-            """
-            对分享文件列表应用正则预览处理。
-                    
-            Args:
-                data: 分享文件列表数据
-                share_account: 用于获取分享的账户（作为后备账户使用）
-            """
-            logger.debug(f"[preview_regex] 开始执行正则预览处理")
-            task = request.json.get("task", {})
-            magic_regex = request.json.get("magic_regex", {})
-            mr = MagicRename(magic_regex)
-            mr.set_taskname(task.get("taskname", ""))
-            logger.debug(f"[preview_regex] 任务名：{task.get('taskname', '')}, 正则规则数：{len(magic_regex)}")
-                    
-            # 获取用于预览的账户（用于查看目标目录中的已有文件）
-            # 优先级：1. 任务指定的账户 2. 用于获取分享的账户 3. 旧格式 cookie
-            preview_account = None
-            task_account_name = task.get("account_name", "")
-                    
-            if task_account_name and task_account_name != "auto":
-                preview_account, _ = get_account_by_name(task_account_name)
-                logger.debug(f"[preview_regex] 使用任务指定账户：{task_account_name}")
-                    
-            if not preview_account and share_account:
-                # 使用获取分享时的同一个账户
-                preview_account = share_account
-                logger.debug(f"[preview_regex] 使用分享账户进行预览")
-                    
-            if not preview_account:
-                # 回退到旧格式
-                if config_data.get("cookie"):
-                    preview_account = Quark(config_data["cookie"][0])
-                    logger.debug(f"[preview_regex] 使用旧格式 cookie 账户")
-                else:
-                    logger.warning(f"[preview_regex] 未配置任何账户，跳过预览")
-                    return
-            
-            # 获取目标目录的已有文件列表
-            dir_file_list = []
-            dir_filename_list = []
-            savepath = task.get("savepath", "")
-                        
-            if savepath:
-                logger.debug(f"[preview_regex] 开始获取目标目录文件列表：{savepath}")
-                try:
-                    get_fids = preview_account.get_fids([savepath])
-                    if get_fids:
-                        logger.debug(f"[preview_regex] 获取目录 fid: {get_fids[0]['fid']}")
-                        ls_result = preview_account.ls_dir(get_fids[0]["fid"])
-                        if ls_result and "data" in ls_result:
-                            dir_file_list = ls_result["data"].get("list", [])
-                            dir_filename_list = [f["file_name"] for f in dir_file_list]
-                            logger.debug(f"[preview_regex] 目标目录中有 {len(dir_file_list)} 个文件")
-                except Exception as e:
-                    logger.warning(f"[preview_regex] 获取目标目录失败：{e}")
-            else:
-                logger.debug(f"[preview_regex] 未配置保存路径，跳过目录文件获取")
-
-            pattern, replace = mr.magic_regex_conv(
-                task.get("pattern", ""), task.get("replace", "")
-            )
-            logger.debug(f"[preview_regex] 正则表达式：pattern={pattern}, replace={replace}")
-            
-            for share_file in data["list"]:
-                search_pattern = (
-                    task["update_subdir"]
-                    if share_file["dir"] and task.get("update_subdir")
-                    else pattern
-                )
-                if re.search(search_pattern, share_file["file_name"]):
-                    # 文件名重命名，目录不重命名
-                    file_name_re = (
-                        share_file["file_name"]
-                        if share_file["dir"]
-                        else mr.sub(pattern, replace, share_file["file_name"])
-                    )
-                    if file_name_saved := mr.is_exists(
-                        file_name_re,
-                        dir_filename_list,
-                        (task.get("ignore_extension") and not share_file["dir"]),
-                    ):
-                        share_file["file_name_saved"] = file_name_saved
-                        logger.debug(f"[preview_regex] 文件已存在：{share_file['file_name']} -> {file_name_saved}")
-                    else:
-                        share_file["file_name_re"] = file_name_re
-                        logger.debug(f"[preview_regex] 文件重命名：{share_file['file_name']} -> {file_name_re}")
-                # 与实际转存逻辑一致：到达指定文件（含）后停止
-                if share_file["fid"] == task.get("startfid", ""):
-                    break
-            
-            # 文件列表排序
-            if re.search(r"\{I+\}", replace):
-                # 获取排序起始值，如果没有配置则默认为 1
-                start_index = task.get("sort_index", 1)
-                if not start_index or start_index == "":
-                    start_index = 1
-                else:
-                    try:
-                        start_index = int(start_index)
-                    except (ValueError, TypeError):
-                        start_index = 1
-                logger.debug(f"[preview_regex] 检测到排序变量 {{I+}}，使用排序基数：start_index={start_index}")
-                mr.set_dir_file_list(dir_file_list, replace, start_index)
-                mr.sort_file_list(data["list"], start_index=start_index)
-                logger.debug(f"[preview_regex] 排序完成，应用 sort_index={start_index}")
-            else:
-                logger.debug(f"[preview_regex] 未检测到排序变量，跳过排序处理")
-
-        if request.json.get("task"):
-            preview_regex(data, share_account=account)
+        # ── 正则处理预览（dir_file_list 已通过并行获取）──
+        if need_preview:
+            _apply_preview_regex(data, task, magic_regex, dir_file_list, preview_account, account)
 
         return jsonify({"success": True, "data": data})
     except Exception as e:
         logging.error(f">>> get_share_detail 错误: {str(e)}")
         return jsonify({"success": False, "data": {"error": f"获取分享详情失败: {str(e)}"}})
 
+
+def _apply_preview_regex(data, task, magic_regex, dir_file_list, preview_account, share_account):
+    """
+    对分享文件列表应用正则预览处理（纯 CPU 操作，使用预先获取的 dir_file_list）。
+
+    Args:
+        data: 分享文件列表数据
+        task: 任务配置字典
+        magic_regex: 正则规则集合
+        dir_file_list: 目标目录已有文件列表（已通过并行线程预取）
+        preview_account: 预览使用的网盘账户
+        share_account: 分享来源账户（后备）
+    """
+    logger.debug(f"[preview_regex] 开始执行正则预览处理")
+    mr = MagicRename(magic_regex)
+    mr.set_taskname(task.get("taskname", ""))
+    logger.debug(f"[preview_regex] 任务名：{task.get('taskname', '')}, 正则规则数：{len(magic_regex)}")
+
+    # 如果未通过并行获取 preview_account，尝试解析
+    if not preview_account:
+        task_account_name = task.get("account_name", "")
+        if task_account_name and task_account_name != "auto":
+            preview_account, _ = get_account_by_name(task_account_name)
+        if not preview_account and share_account:
+            preview_account = share_account
+        if not preview_account:
+            if config_data.get("cookie"):
+                preview_account = AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0)
+            else:
+                logger.warning(f"[preview_regex] 未配置任何账户，跳过预览")
+                return
+
+    # 如果 dir_file_list 未通过并行获取（无 savepath 场景），这里补充获取
+    savepath = task.get("savepath", "")
+    if savepath and not dir_file_list:
+        savepath_normalized = re.sub(r'/+', '/', savepath)
+        logger.debug(f"[preview_regex] 补充获取目标目录文件列表：{savepath_normalized}")
+        try:
+            drive_type_key = getattr(preview_account, 'DRIVE_TYPE', 'quark')
+            cookie_key = getattr(preview_account, 'cookie', '')
+
+            fid = preview_account.savepath_fid.get(savepath_normalized)
+            if not fid:
+                fids_cache_key = make_cache_key(drive_type_key, cookie_key, 'fids', savepath_normalized)
+                fid = get_cached_fids(fids_cache_key)
+            if not fid:
+                get_fids_result = preview_account.get_fids([savepath_normalized])
+                if get_fids_result:
+                    fid = get_fids_result[0]["fid"]
+                    fids_cache_key = make_cache_key(drive_type_key, cookie_key, 'fids', savepath_normalized)
+                    set_cached_fids(fids_cache_key, fid)
+
+            if fid:
+                lsdir_cache_key = make_cache_key(drive_type_key, cookie_key, 'lsdir', str(fid))
+                cached_ls = get_cached_lsdir(lsdir_cache_key)
+                if cached_ls is not None:
+                    dir_file_list = cached_ls
+                else:
+                    ls_result = preview_account.ls_dir(fid, max_items=2000)
+                    if ls_result and "data" in ls_result:
+                        dir_file_list = ls_result["data"].get("list", [])
+                        set_cached_lsdir(lsdir_cache_key, dir_file_list)
+        except Exception as e:
+            logger.warning(f"[preview_regex] 获取目标目录失败：{e}")
+
+    dir_filename_list = [f["file_name"] for f in dir_file_list]
+    logger.debug(f"[preview_regex] 目标目录中有 {len(dir_file_list)} 个文件")
+
+    pattern, replace = mr.magic_regex_conv(
+        task.get("pattern", ""), task.get("replace", "")
+    )
+    logger.debug(f"[preview_regex] 正则表达式：pattern={pattern}, replace={replace}")
+    
+    # 预编译搜索正则，避免循环内重复编译
+    compiled_search = re.compile(pattern) if pattern else None
+    compiled_subdir = re.compile(task["update_subdir"]) if task.get("update_subdir") else None
+    startfid = task.get("startfid", "")
+    ignore_ext = task.get("ignore_extension")
+
+    for share_file in data["list"]:
+        search_re = (
+            compiled_subdir
+            if share_file["dir"] and compiled_subdir
+            else compiled_search
+        )
+        if search_re and search_re.search(share_file["file_name"]):
+            # 文件名重命名，目录不重命名
+            file_name_re = (
+                share_file["file_name"]
+                if share_file["dir"]
+                else mr.sub(pattern, replace, share_file["file_name"])
+            )
+            if file_name_saved := mr.is_exists(
+                file_name_re,
+                dir_filename_list,
+                (ignore_ext and not share_file["dir"]),
+            ):
+                share_file["file_name_saved"] = file_name_saved
+            else:
+                share_file["file_name_re"] = file_name_re
+        # 与实际转存逻辑一致：到达指定文件（含）后停止
+        if share_file["fid"] == startfid:
+            break
+    
+    # 文件列表排序
+    if re.search(r"\{I+\}", replace):
+        start_index = task.get("sort_index", 1)
+        if not start_index or start_index == "":
+            start_index = 1
+        else:
+            try:
+                start_index = int(start_index)
+            except (ValueError, TypeError):
+                start_index = 1
+        logger.debug(f"[preview_regex] 检测到排序变量 {{I+}}，使用排序基数：start_index={start_index}")
+        mr.set_dir_file_list(dir_file_list, replace, start_index)
+        mr.sort_file_list(data["list"], start_index=start_index)
+        logger.debug(f"[preview_regex] 排序完成，应用 sort_index={start_index}")
+    else:
+        logger.debug(f"[preview_regex] 未检测到排序变量，跳过排序处理")
 
 @app.route("/get_savepath_detail")
 def get_savepath_detail():
@@ -726,6 +823,9 @@ def get_savepath_detail():
             return jsonify({"success": False, "data": {"error": "未配置有效的网盘账户，请先在系统配置中添加Cookie或多网盘账户"}})
 
         paths = []
+        drive_type_key = getattr(account, 'DRIVE_TYPE', 'quark')
+        cookie_key = getattr(account, 'cookie', '')
+
         if path := request.args.get("path"):
             path = re.sub(r"/+", "/", path)
             if path == "/":
@@ -734,21 +834,64 @@ def get_savepath_detail():
                 dir_names = path.split("/")
                 if dir_names[0] == "":
                     dir_names.pop(0)
-                path_fids = []
-                current_path = ""
-                for dir_name in dir_names:
-                    current_path += "/" + dir_name
-                    path_fids.append(current_path)
-                get_fids = account.get_fids(path_fids)
 
-                if get_fids:
-                    fid = get_fids[-1]["fid"]
-                    paths = [
-                        {"fid": get_fid["fid"], "name": dir_name}
-                        for get_fid, dir_name in zip(get_fids, dir_names)
-                    ]
+                # 尝试从 adapter 的 savepath_fid 获取最终目录 fid
+                full_path = "/" + "/".join(dir_names)
+                fid = account.savepath_fid.get(full_path)
+
+                if fid:
+                    # savepath_fid 命中，但仍需构建 paths 面包屑
+                    # 无法从缓存重建完整面包屑，走正常流程获取
+                    path_fids = []
+                    current_path = ""
+                    for dir_name in dir_names:
+                        current_path += "/" + dir_name
+                        path_fids.append(current_path)
+                    get_fids = account.get_fids(path_fids)
+                    if get_fids:
+                        fid = get_fids[-1]["fid"]
+                        paths = [
+                            {"fid": get_fid["fid"], "name": dir_name}
+                            for get_fid, dir_name in zip(get_fids, dir_names)
+                        ]
                 else:
-                    return jsonify({"success": False, "data": {"error": "获取fid失败，请检查路径是否存在"}})
+                    # 尝试应用级缓存
+                    fids_cache_key = make_cache_key(drive_type_key, cookie_key, 'fids', full_path)
+                    cached_fid = get_cached_fids(fids_cache_key)
+
+                    if cached_fid:
+                        fid = cached_fid
+                        # 同样需要面包屑，走 get_fids
+                        path_fids = []
+                        current_path = ""
+                        for dir_name in dir_names:
+                            current_path += "/" + dir_name
+                            path_fids.append(current_path)
+                        get_fids = account.get_fids(path_fids)
+                        if get_fids:
+                            fid = get_fids[-1]["fid"]
+                            paths = [
+                                {"fid": get_fid["fid"], "name": dir_name}
+                                for get_fid, dir_name in zip(get_fids, dir_names)
+                            ]
+                    else:
+                        # API 请求
+                        path_fids = []
+                        current_path = ""
+                        for dir_name in dir_names:
+                            current_path += "/" + dir_name
+                            path_fids.append(current_path)
+                        get_fids = account.get_fids(path_fids)
+
+                        if get_fids:
+                            fid = get_fids[-1]["fid"]
+                            set_cached_fids(fids_cache_key, fid)
+                            paths = [
+                                {"fid": get_fid["fid"], "name": dir_name}
+                                for get_fid, dir_name in zip(get_fids, dir_names)
+                            ]
+                        else:
+                            return jsonify({"success": False, "data": {"error": "获取fid失败，请检查路径是否存在"}})
         else:
             fid = request.args.get("fid", "0")
             logging.info(f">>> get_savepath_detail fid={repr(fid)}, drive_type={drive_type}")
@@ -761,12 +904,21 @@ def get_savepath_detail():
                     except Exception as e:
                         logging.debug(f">>> 获取文件路径失败: {e}")
                         paths = []
-        ls_result = account.ls_dir(fid)
-        if not ls_result or "data" not in ls_result:
-            return jsonify({"success": False, "data": {"error": "获取目录列表失败，请检查Cookie是否有效"}})
-        
+
+        # ls_dir 结果走应用级缓存
+        lsdir_cache_key = make_cache_key(drive_type_key, cookie_key, 'lsdir', str(fid))
+        cached_ls = get_cached_lsdir(lsdir_cache_key)
+        if cached_ls is not None:
+            file_list_data = cached_ls
+        else:
+            ls_result = account.ls_dir(fid)
+            if not ls_result or "data" not in ls_result:
+                return jsonify({"success": False, "data": {"error": "获取目录列表失败，请检查Cookie是否有效"}})
+            file_list_data = ls_result["data"].get("list", [])
+            set_cached_lsdir(lsdir_cache_key, file_list_data)
+
         file_list = {
-            "list": ls_result["data"].get("list", []),
+            "list": file_list_data,
             "paths": paths,
             "drive_type": drive_type,  # 返回网盘类型
         }
@@ -875,6 +1027,7 @@ def aliyun_token_refresh():
                 Config.write_json(CONFIG_PATH, config_data)
                 # 清除适配器缓存
                 AdapterFactory.clear_cache()
+                invalidate_all()  # 同步清空应用级预览缓存
                 
             return jsonify({
                 "success": True,
@@ -927,6 +1080,7 @@ def xunlei_token_refresh():
                 target_account["_token_updated_at"] = time.time()
                 Config.write_json(CONFIG_PATH, config_data)
                 AdapterFactory.clear_cache()
+                invalidate_all()  # 同步清空应用级预览缓存
 
             return jsonify({
                 "success": True,
@@ -981,6 +1135,7 @@ def update_account_token():
         Config.write_json(CONFIG_PATH, config_data)
         # 清除适配器缓存
         AdapterFactory.clear_cache()
+        invalidate_all()  # 同步清空应用级预览缓存
         logging.info(f"[{drive_type}] 账户 {account_name} 的 Token 已手动更新")
         return jsonify({"success": True, "message": "Token 更新成功"})
     except Exception as e:
@@ -1457,3 +1612,4 @@ if __name__ == "__main__":
         host=HOST,
         port=PORT,
     )
+    

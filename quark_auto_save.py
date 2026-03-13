@@ -247,6 +247,12 @@ class MagicRename:
         self.magic_regex.update(magic_regex)
         self.magic_variable.update(magic_variable)
         self.dir_filename_dict = {}
+        # 预编译正则缓存
+        self._compiled_cache = {}
+        # sub() 预分析缓存（按 pattern+replace 缓存准备结果）
+        self._last_prep_key = None
+        self._last_compiled_pattern = None
+        self._last_prep = None
         logger.debug(f"[MagicRegex.__init__] 初始化完成，加载了 {len(self.magic_regex)} 条正则规则和 {len(self.magic_variable)} 个变量")
 
     def set_taskname(self, taskname):
@@ -274,8 +280,86 @@ class MagicRename:
         logger.debug(f"[MagicRegex.magic_regex_conv] 输出：pattern={pattern}, replace={replace}")
         return pattern, replace
 
+    def _get_compiled(self, pattern):
+        """获取或创建预编译的正则表达式（带缓存）"""
+        if pattern not in self._compiled_cache:
+            self._compiled_cache[pattern] = re.compile(pattern)
+        return self._compiled_cache[pattern]
+
+    def _prepare_sub(self, replace):
+        """预分析 replace 字符串，返回需要处理的变量列表及其预编译正则
+        
+        只遍历一次 magic_variable，筛出 replace 中实际出现的 key，
+        并预编译其对应正则，避免每个文件重复编译。
+        
+        Returns:
+            list of (key_type, key, compiled_patterns_or_none)
+        """
+        relevant = []
+        for key, p_list in self.magic_variable.items():
+            if key not in replace:
+                continue
+            if key == "{I}":
+                continue
+            if key == "{TASKNAME}":
+                relevant.append(('taskname', key, None))
+            elif p_list and isinstance(p_list, list):
+                compiled = [self._get_compiled(p) for p in p_list]
+                relevant.append(('regex', key, compiled))
+            else:
+                relevant.append(('clear', key, None))
+        return relevant
+
+    def _sub_single(self, compiled_pattern, replace_template, prep, file_name):
+        """优化后的单文件替换（使用预编译正则和预分析数据）
+        
+        Args:
+            compiled_pattern: 预编译的主正则（可为 None）
+            replace_template: 替换模板字符串
+            prep: _prepare_sub() 返回的预分析结果
+            file_name: 原始文件名
+            
+        Returns:
+            str: 替换后的文件名
+        """
+        replace = replace_template
+
+        for key_type, key, compiled_list in prep:
+            if key_type == 'taskname':
+                replace = replace.replace(key, self.magic_variable["{TASKNAME}"])
+            elif key_type == 'regex':
+                matched = False
+                for cp in compiled_list:
+                    m = cp.search(file_name)
+                    if m:
+                        value = m.group()
+                        if key == "{DATE}":
+                            value = "".join(
+                                [char for char in value if char.isdigit()]
+                            )
+                            value = (
+                                str(datetime.now().year)[: (8 - len(value))] + value
+                            )
+                        replace = replace.replace(key, value)
+                        matched = True
+                        break
+                if not matched:
+                    if key == "{SXX}":
+                        replace = replace.replace(key, "S01")
+                    else:
+                        replace = replace.replace(key, "")
+            elif key_type == 'clear':
+                replace = replace.replace(key, "")
+
+        if compiled_pattern and replace:
+            file_name = compiled_pattern.sub(replace, file_name)
+        else:
+            file_name = replace
+
+        return file_name
+
     def sub(self, pattern, replace, file_name):
-        """魔法正则、变量替换
+        """魔法正则、变量替换（优化版：自动缓存预编译正则和预分析结果）
             
         Args:
             pattern: 正则表达式
@@ -285,58 +369,46 @@ class MagicRename:
         Returns:
             str: 替换后的文件名
         """
-        logger.debug(f"[MagicRegex.sub] 开始处理：file_name={file_name}, pattern={pattern}, replace={replace}")
+        logger.debug(f"[MagicRegex.sub] 开始处理：file_name={file_name}")
             
         if not replace:
-            logger.debug(f"[MagicRegex.sub] replace 为空，直接返回原文件名")
             return file_name
+
+        # 缓存预分析结果：同一 pattern+replace 组合只准备一次
+        cache_key = (pattern, replace)
+        if cache_key != self._last_prep_key:
+            self._last_compiled_pattern = self._get_compiled(pattern) if pattern else None
+            self._last_prep = self._prepare_sub(replace)
+            self._last_prep_key = cache_key
+
+        result = self._sub_single(self._last_compiled_pattern, replace, self._last_prep, file_name)
+        logger.debug(f"[MagicRegex.sub] 结果：{result}")
+        return result
+
+    def sub_batch(self, pattern, replace, file_names):
+        """批量文件名替换（高性能版本）
+        
+        一次性预编译正则和预分析变量，然后批量处理所有文件名。
+        比循环调用 sub() 更快，因为准备工作只做一次。
+        
+        Args:
+            pattern: 正则表达式
+            replace: 替换字符串
+            file_names: 文件名列表
                 
-        # 预处理替换变量
-        for key, p_list in self.magic_variable.items():
-            if key in replace:
-                logger.debug(f"[MagicRegex.sub] 处理变量：{key}")
-                # 正则类替换变量
-                if p_list and isinstance(p_list, list):
-                    for p in p_list:
-                        match = re.search(p, file_name)
-                        if match:
-                            # 匹配成功，替换为匹配到的值
-                            value = match.group()
-                            # 日期格式转换：补全、格式化
-                            if key == "{DATE}":
-                                value = "".join(
-                                    [char for char in value if char.isdigit()]
-                                )
-                                value = (
-                                    str(datetime.now().year)[: (8 - len(value))] + value
-                                )
-                            replace = replace.replace(key, value)
-                            logger.debug(f"[MagicRegex.sub] {key} 匹配成功：{value}")
-                            break
-                # 非正则类替换变量
-                if key == "{TASKNAME}":
-                    replace = replace.replace(key, self.magic_variable["{TASKNAME}"])
-                    logger.debug(f"[MagicRegex.sub] 替换 TASKNAME: {self.magic_variable['{TASKNAME}']}")
-                elif key == "{SXX}" and not match:
-                    replace = replace.replace(key, "S01")
-                    logger.debug(f"[MagicRegex.sub] {key} 未匹配，使用默认值 S01")
-                elif key == "{I}":
-                    logger.debug(f"[MagicRegex.sub] 跳过排序变量 {key}")
-                    continue
-                else:
-                    # 清理未匹配的 magic_variable key
-                    replace = replace.replace(key, "")
-                    logger.debug(f"[MagicRegex.sub] 清理未匹配的变量：{key}")
-                        
-        if pattern and replace:
-            logger.debug(f"[MagicRegex.sub] 执行正则替换：re.sub({pattern}, {replace}, {file_name})")
-            file_name = re.sub(pattern, replace, file_name)
-        else:
-            logger.debug(f"[MagicRegex.sub] 直接使用替换式：{replace}")
-            file_name = replace
-                
-        logger.debug(f"[MagicRegex.sub] 最终结果：{file_name}")
-        return file_name
+        Returns:
+            list[str]: 替换后的文件名列表
+        """
+        if not replace:
+            return list(file_names)
+
+        compiled_pattern = self._get_compiled(pattern) if pattern else None
+        prep = self._prepare_sub(replace)
+        
+        return [
+            self._sub_single(compiled_pattern, replace, prep, fn)
+            for fn in file_names
+        ]
 
     def _custom_sort_key(self, name):
         """自定义排序键"""
@@ -356,7 +428,6 @@ class MagicRename:
         logger.debug(f"[MagicRegex.sort_file_list] 开始排序，start_index={start_index}, file_list 数量={len(file_list)}")
             
         filename_list = [
-            # 强制加入 `文件修改时间` 字段供排序，效果：1 无可排序字符时则按修改时间排序，2 和目录已有文件重名时始终在其后
             f"{f['file_name_re']}_{f['updated_at']}"
             for f in file_list
             if f.get("file_name_re") and not f["dir"]
@@ -364,34 +435,38 @@ class MagicRename:
         logger.debug(f"[MagicRegex.sort_file_list] 提取文件名列表：{len(filename_list)} 个文件")
             
         dir_filename_dict = dir_filename_dict or self.dir_filename_dict
-        # 合并目录文件列表
         filename_list = list(set(filename_list) | set(dir_filename_dict.values()))
         logger.debug(f"[MagicRegex.sort_file_list] 合并后文件列表：{len(filename_list)} 个文件")
             
         filename_list = natsorted(filename_list, key=self._custom_sort_key)
         logger.debug(f"[MagicRegex.sort_file_list] 自然排序完成")
+        
+        # 预构建 name→index 映射，避免 O(n²) 的 list.index() 调用
+        name_to_sorted_idx = {name: idx for idx, name in enumerate(filename_list)}
+        dir_values_set = set(dir_filename_dict.values())
             
         filename_index = {}
         for name in filename_list:
-            if name in dir_filename_dict.values():
+            if name in dir_values_set:
                 continue
-            i = filename_list.index(name) + start_index
-            while i in dir_filename_dict.keys():
+            i = name_to_sorted_idx[name] + start_index
+            while i in dir_filename_dict:
                 i += 1
             dir_filename_dict[i] = name
             filename_index[name] = i
             
         logger.debug(f"[MagicRegex.sort_file_list] 生成索引映射：{len(filename_index)} 个文件")
-            
+        
+        # 预编译 {I+} 正则，避免循环内重复编译
+        compiled_i_pattern = self._get_compiled(r"\{I+\}")
         for file in file_list:
             if file.get("file_name_re"):
-                if match := re.search(r"\{I+\}", file["file_name_re"]):
+                if match := compiled_i_pattern.search(file["file_name_re"]):
                     i = filename_index.get(
                         f"{file['file_name_re']}_{file['updated_at']}", 0
                     )
                     old_name = file["file_name_re"]
-                    file["file_name_re"] = re.sub(
-                        match.group(),
+                    file["file_name_re"] = compiled_i_pattern.sub(
                         str(i).zfill(match.group().count("I")),
                         file["file_name_re"],
                     )
@@ -417,8 +492,9 @@ class MagicRename:
         if not filename_list:
             logger.debug(f"[MagicRegex.set_dir_file_list] 文件名列表为空，跳过处理")
             return
-            
-        if match := re.search(r"\{I+\}", replace):
+        
+        compiled_i_pattern = self._get_compiled(r"\{I+\}")
+        if match := compiled_i_pattern.search(replace):
             # 由替换式转换匹配式
             magic_i = match.group()
             pattern_i = r"\d" * magic_i.count("I")
@@ -426,19 +502,23 @@ class MagicRename:
             for key, _ in self.magic_variable.items():
                 if key in pattern:
                     pattern = pattern.replace(key, "🔣")
-            pattern = re.sub(r"\\[0-9]+", "🔣", pattern)  # \1 \2 \3
+            compiled_backref = self._get_compiled(r"\\[0-9]+")
+            pattern = compiled_backref.sub("🔣", pattern)  # \1 \2 \3
             pattern = f"({re.escape(pattern).replace('🔣', '.*?').replace('🔢', f')({pattern_i})(')})"
             logger.debug(f"[MagicRegex.set_dir_file_list] 构建正则模式：{pattern}")
             
+            # 预编译该模式，在循环中复用
+            compiled_dir_pattern = re.compile(pattern)
+            
             # 获取起始编号
-            if match := re.match(pattern, filename_list[-1]):
+            if match := compiled_dir_pattern.match(filename_list[-1]):
                 last_index = int(match.group(2))
                 self.magic_variable["{I}"] = last_index
                 logger.debug(f"[MagicRegex.set_dir_file_list] 从现有文件提取最后序号：{last_index}")
             
             # 目录文件列表
             for filename in filename_list:
-                if match := re.match(pattern, filename):
+                if match := compiled_dir_pattern.match(filename):
                     self.dir_filename_dict[int(match.group(2))] = (
                         match.group(1) + magic_i + match.group(3)
                     )
@@ -458,13 +538,15 @@ class MagicRename:
             filename = os.path.splitext(filename)[0]
             filename_list = [os.path.splitext(f)[0] for f in filename_list]
         # {I+} 模式，用I通配数字序号
-        if match := re.search(r"\{I+\}", filename):
+        compiled_i_pattern = self._get_compiled(r"\{I+\}")
+        if match := compiled_i_pattern.search(filename):
             magic_i = match.group()
             pattern_i = r"\d" * magic_i.count("I")
             pattern = re.escape(filename).replace(re.escape(magic_i), pattern_i)
-            for filename in filename_list:
-                if re.match(pattern, filename):
-                    return filename
+            compiled_exist = re.compile(pattern)
+            for fn in filename_list:
+                if compiled_exist.match(fn):
+                    return fn
             return None
         else:
             return filename if filename in filename_list else None
@@ -674,7 +756,7 @@ class Quark:
                 break
         return fids
 
-    def ls_dir(self, pdir_fid, **kwargs):
+    def ls_dir(self, pdir_fid, max_items=0, **kwargs):
         list_merge = []
         page = 1
         while True:
@@ -700,6 +782,10 @@ class Quark:
                 list_merge += response["data"]["list"]
                 page += 1
             else:
+                break
+            # max_items 限量：达到上限后提前终止分页
+            if max_items > 0 and len(list_merge) >= max_items:
+                list_merge = list_merge[:max_items]
                 break
             if len(list_merge) >= response["metadata"]["_total"]:
                 break
@@ -1006,6 +1092,11 @@ class Quark:
         )
         # 需保存的文件清单
         need_save_list = []
+        # 预编译搜索正则，避免循环内重复编译
+        compiled_search = re.compile(pattern) if pattern else None
+        compiled_subdir = re.compile(task["update_subdir"]) if task.get("update_subdir") else None
+        startfid = task.get("startfid", "")
+        ignore_ext = task.get("ignore_extension")
         # 添加符合的
         for share_file in share_file_list:
             # 如果是目录且未启用更新子目录，直接跳过
@@ -1013,13 +1104,13 @@ class Quark:
                 logger.debug(f"[dir_check_and_save] 跳过目录：{share_file['file_name']}")
                 continue
                 
-            search_pattern = (
-                task["update_subdir"]
-                if share_file["dir"] and task.get("update_subdir")
-                else pattern
+            search_re = (
+                compiled_subdir
+                if share_file["dir"] and compiled_subdir
+                else compiled_search
             )
             # 正则文件名匹配
-            if re.search(search_pattern, share_file["file_name"]):
+            if search_re and search_re.search(share_file["file_name"]):
                 # 判断原文件名是否存在，处理忽略扩展名
                 if not mr.is_exists(
                     share_file["file_name"],
@@ -1549,6 +1640,10 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
 
     # 需保存的文件清单
     need_save_list = []
+    # 预编译搜索正则，避免循环内重复编译
+    compiled_search = re.compile(pattern) if pattern else None
+    compiled_subdir = re.compile(task["update_subdir"]) if task.get("update_subdir") else None
+    ignore_ext = task.get("ignore_extension")
 
     # 添加符合的
     for share_file in share_file_list:
@@ -1557,18 +1652,18 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
             logger.debug(f"[dir_check_and_save_with_adapter] 跳过目录：{share_file['file_name']}")
             continue
             
-        search_pattern = (
-            task["update_subdir"]
-            if share_file["dir"] and task.get("update_subdir")
-            else pattern
+        search_re = (
+            compiled_subdir
+            if share_file["dir"] and compiled_subdir
+            else compiled_search
         )
         # 正则文件名匹配
-        if re.search(search_pattern, share_file["file_name"]):
+        if search_re and search_re.search(share_file["file_name"]):
             # 判断原文件名是否存在
             if not mr.is_exists(
                 share_file["file_name"],
                 dir_filename_list,
-                (task.get("ignore_extension") and not share_file["dir"]),
+                (ignore_ext and not share_file["dir"]),
             ):
                 if share_file["dir"] or subdir_path:
                     share_file["file_name_re"] = share_file["file_name"]
@@ -1578,13 +1673,13 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
                     if not mr.is_exists(
                         file_name_re,
                         dir_filename_list,
-                        task.get("ignore_extension"),
+                        ignore_ext,
                     ):
                         share_file["file_name_re"] = file_name_re
                         need_save_list.append(share_file)
             elif share_file["dir"]:
-                if task.get("update_subdir", False) and re.search(
-                    task["update_subdir"], share_file["file_name"]
+                if task.get("update_subdir", False) and compiled_subdir and compiled_subdir.search(
+                    share_file["file_name"]
                 ):
                     if task.get("update_subdir_resave_mode", False):
                         print(f"重存子目录：{savepath}/{share_file['file_name']}")

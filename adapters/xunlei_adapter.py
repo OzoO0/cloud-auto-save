@@ -467,7 +467,7 @@ class XunleiAdapter(BaseCloudDriveAdapter):
             logging.error(f"[Xunlei] 获取分享详情失败: {e}")
             return {"code": 1, "message": str(e), "data": {"list": []}}
 
-    def ls_dir(self, pdir_fid: str, **kwargs) -> Dict:
+    def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
         """列出用户网盘目录内容"""
         if not self._ensure_tokens_valid():
             return {"code": 1, "message": "Token 无效", "data": {"list": []}}
@@ -504,6 +504,11 @@ class XunleiAdapter(BaseCloudDriveAdapter):
                 files = result.get("files", [])
                 for item in files:
                     file_list.append(self._convert_xunlei_item(item))
+
+                # max_items 限量：达到上限后提前终止分页
+                if max_items > 0 and len(file_list) >= max_items:
+                    file_list = file_list[:max_items]
+                    break
 
                 page_token = result.get("next_page_token", "")
                 if not page_token:

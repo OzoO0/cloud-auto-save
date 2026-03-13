@@ -826,7 +826,7 @@ class BaiduAdapter(BaseCloudDriveAdapter):
             "path": path,
         }
 
-    def ls_dir(self, pdir_fid: str, **kwargs) -> Dict:
+    def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
         """列出用户网盘目录内容"""
         if not self._session:
             return {"code": 1, "message": "百度网盘客户端未初始化", "data": {"list": []}}

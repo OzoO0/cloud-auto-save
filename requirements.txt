@@ -3,3 +3,4 @@ apscheduler
 requests
 treelib
 natsort
+cachetools

@@ -297,7 +297,7 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
     #  用户网盘操作（使用带 cookie 的 auth_session）
     # ----------------------------------------------------------------
 
-    def ls_dir(self, pdir_fid: str, **kwargs) -> Dict:
+    def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
         """列出用户网盘目录内容"""
         list_merge = []
         offset = 0
@@ -337,6 +337,10 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
                     break
                 for item in file_list:
                     list_merge.append(self._convert_dir_item(item))
+                # max_items 限量：达到上限后提前终止分页
+                if max_items > 0 and len(list_merge) >= max_items:
+                    list_merge = list_merge[:max_items]
+                    break
                 if len(file_list) < limit:
                     break
                 offset += limit

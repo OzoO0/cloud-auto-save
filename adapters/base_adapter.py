@@ -64,11 +64,12 @@ class BaseCloudDriveAdapter(ABC):
         pass
 
     @abstractmethod
-    def ls_dir(self, pdir_fid: str, **kwargs) -> Dict:
+    def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
         """
         列出目录内容
         Args:
             pdir_fid: 目录ID
+            max_items: 最大返回条目数，0 表示不限制（全量加载）
         Returns:
             响应字典，包含 code, data.list 等字段
         """
