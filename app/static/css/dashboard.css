@@ -1,6 +1,7 @@
 /* ============================================
    Apple Style UI - quark-auto-save
    CSS Variables + Dark Mode + Glassmorphism
+   Enhanced v2.0
    ============================================ */
 
 /* --- Color Scheme Hint --- */
@@ -15,14 +16,20 @@
   /* Brand */
   --apple-blue: #007AFF;
   --apple-blue-hover: #0066d6;
+  --apple-blue-light: rgba(0, 122, 255, 0.1);
   --apple-green: #34C759;
   --apple-green-hover: #2da44e;
+  --apple-green-light: rgba(52, 199, 89, 0.1);
   --apple-red: #FF3B30;
   --apple-red-hover: #d63027;
+  --apple-red-light: rgba(255, 59, 48, 0.1);
   --apple-orange: #FF9500;
+  --apple-orange-light: rgba(255, 149, 0, 0.1);
   --apple-yellow: #FFCC00;
   --apple-teal: #5AC8FA;
+  --apple-teal-light: rgba(90, 200, 250, 0.1);
   --apple-gray: #8E8E93;
+  --apple-indigo: #5856D6;
 
   /* Backgrounds */
   --bg-primary: #f5f5f7;
@@ -46,6 +53,7 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06);
   --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-blue-glow: 0 4px 16px rgba(0, 122, 255, 0.2);
 
   /* Glass */
   --glass-bg: rgba(255, 255, 255, 0.72);
@@ -70,6 +78,7 @@
   --transition-fast: 0.15s ease;
   --transition-normal: 0.25s ease;
   --transition-slow: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring: 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
 
   /* Font */
   --font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
@@ -95,6 +104,7 @@
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
     --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.4);
     --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.4);
+    --shadow-blue-glow: 0 4px 16px rgba(10, 132, 255, 0.25);
 
     --glass-bg: rgba(44, 44, 46, 0.72);
     --glass-bg-thick: rgba(44, 44, 46, 0.88);
@@ -102,10 +112,15 @@
 
     --apple-blue: #0A84FF;
     --apple-blue-hover: #409CFF;
+    --apple-blue-light: rgba(10, 132, 255, 0.15);
     --apple-green: #30D158;
     --apple-green-hover: #4bda6e;
+    --apple-green-light: rgba(48, 209, 88, 0.15);
     --apple-red: #FF453A;
     --apple-red-hover: #ff6961;
+    --apple-red-light: rgba(255, 69, 58, 0.15);
+    --apple-orange-light: rgba(255, 149, 0, 0.15);
+    --apple-teal-light: rgba(90, 200, 250, 0.15);
   }
 }
 
@@ -184,6 +199,65 @@ hr {
 }
 
 /* =====================
+   2.1 Animations
+   ===================== */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes slideInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--apple-blue-light); }
+  50% { box-shadow: 0 0 0 8px transparent; }
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.4s var(--transition-slow) both;
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease both;
+}
+
+/* =====================
    3. Top Navigation Bar
    ===================== */
 .apple-navbar {
@@ -199,6 +273,7 @@ hr {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  animation: slideInDown 0.3s ease both;
 }
 
 @supports not (backdrop-filter: blur(20px)) {
@@ -219,6 +294,11 @@ hr {
   padding: 0;
   margin: 0;
   white-space: nowrap;
+  transition: opacity var(--transition-fast);
+}
+
+.apple-navbar .navbar-brand:hover {
+  opacity: 0.7;
 }
 
 .apple-navbar .navbar-brand i {
@@ -233,6 +313,7 @@ hr {
   border-radius: var(--radius-sm);
   padding: 2px;
   gap: 2px;
+  position: relative;
 }
 
 .segmented-control .seg-btn {
@@ -246,6 +327,8 @@ hr {
   cursor: pointer;
   transition: all var(--transition-fast);
   white-space: nowrap;
+  position: relative;
+  z-index: 1;
 }
 
 .segmented-control .seg-btn:hover {
@@ -255,8 +338,12 @@ hr {
 .segmented-control .seg-btn.active {
   background: var(--bg-secondary);
   color: var(--text-primary);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08), 0 0.5px 1px rgba(0, 0, 0, 0.04);
   font-weight: 600;
+}
+
+.segmented-control .seg-btn:active {
+  transform: scale(0.97);
 }
 
 .navbar-actions {
@@ -271,11 +358,14 @@ hr {
   display: flex;
   align-items: center;
   gap: 4px;
-  transition: color var(--transition-fast);
+  transition: all var(--transition-fast);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
 }
 
 .navbar-actions a:hover {
   color: var(--apple-red);
+  background: var(--apple-red-light);
 }
 
 /* =====================
@@ -303,11 +393,21 @@ hr {
   margin-bottom: var(--spacing-lg);
   overflow: hidden;
   border: 1px solid var(--border-color);
-  transition: box-shadow var(--transition-normal);
+  transition: box-shadow var(--transition-normal), transform var(--transition-normal);
+  animation: fadeInUp 0.4s ease both;
 }
+
+.config-card:nth-child(1) { animation-delay: 0.05s; }
+.config-card:nth-child(2) { animation-delay: 0.1s; }
+.config-card:nth-child(3) { animation-delay: 0.15s; }
+.config-card:nth-child(4) { animation-delay: 0.2s; }
+.config-card:nth-child(5) { animation-delay: 0.25s; }
+.config-card:nth-child(6) { animation-delay: 0.3s; }
+.config-card:nth-child(7) { animation-delay: 0.35s; }
 
 .config-card:hover {
   box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 .config-card-header {
@@ -387,6 +487,7 @@ select.form-control {
   padding: 8px 12px;
   transition: all var(--transition-fast);
   height: auto;
+  -webkit-appearance: none;
 }
 
 .form-control:focus,
@@ -394,13 +495,18 @@ select.form-control {
 select.form-control:focus {
   background-color: var(--bg-secondary);
   border-color: var(--apple-blue);
-  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+  box-shadow: 0 0 0 3px var(--apple-blue-light);
   color: var(--text-primary);
   outline: none;
 }
 
 .form-control::placeholder {
   color: var(--text-tertiary);
+  transition: color var(--transition-fast);
+}
+
+.form-control:focus::placeholder {
+  color: transparent;
 }
 
 .form-control:disabled,
@@ -490,10 +596,16 @@ select.form-control:focus {
   transition: all var(--transition-fast);
   border: none;
   cursor: pointer;
+  position: relative;
+  overflow: hidden;
 }
 
 .btn:focus {
   box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.2);
+}
+
+.btn:active {
+  transform: scale(0.96);
 }
 
 /* Icon buttons */
@@ -513,7 +625,12 @@ select.form-control:focus {
   color: var(--text-on-fill);
 }
 
-.btn-primary:hover,
+.btn-primary:hover {
+  background-color: var(--apple-blue-hover);
+  color: var(--text-on-fill);
+  box-shadow: var(--shadow-blue-glow);
+}
+
 .btn-primary:active {
   background-color: var(--apple-blue-hover);
   color: var(--text-on-fill);
@@ -529,6 +646,7 @@ select.form-control:focus {
 .btn-success:active {
   background-color: var(--apple-green-hover);
   color: var(--text-on-fill);
+  box-shadow: 0 4px 16px rgba(52, 199, 89, 0.2);
 }
 
 /* Danger */
@@ -654,6 +772,7 @@ select.form-control:focus {
   margin-bottom: var(--spacing-lg);
   box-shadow: var(--shadow-sm);
   border: 1px solid var(--border-color);
+  animation: fadeInUp 0.35s ease both;
 }
 
 .filter-bar .row {
@@ -665,6 +784,8 @@ select.form-control:focus {
   font-weight: 500;
   color: var(--text-secondary);
   white-space: nowrap;
+  margin-bottom: 4px;
+  display: block;
 }
 
 /* =====================
@@ -679,10 +800,12 @@ select.form-control:focus {
   overflow: visible;
   transition: all var(--transition-normal);
   position: relative;
+  animation: fadeInUp 0.35s ease both;
 }
 
 .task-card:hover {
   box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 .task-card-header {
@@ -803,6 +926,7 @@ select.form-control:focus {
   padding: 6px 8px;
   box-shadow: var(--shadow-float);
   border: 1px solid var(--glass-border);
+  animation: fadeInUp 0.5s var(--transition-slow) 0.3s both;
 }
 
 @supports not (backdrop-filter: blur(20px)) {
@@ -831,15 +955,16 @@ select.form-control:focus {
   transition: all var(--transition-fast);
   background: transparent;
   color: var(--text-secondary);
+  position: relative;
 }
 
 .bottom-buttons button:hover {
   background: var(--bg-tertiary);
-  transform: scale(1.05);
+  transform: scale(1.08);
 }
 
 .bottom-buttons button:active {
-  transform: scale(0.95);
+  transform: scale(0.92);
 }
 
 .bottom-buttons button.btn-save {
@@ -847,7 +972,7 @@ select.form-control:focus {
 }
 
 .bottom-buttons button.btn-save:hover {
-  background: rgba(52, 199, 89, 0.12);
+  background: var(--apple-green-light);
 }
 
 .bottom-buttons button.btn-run {
@@ -855,7 +980,7 @@ select.form-control:focus {
 }
 
 .bottom-buttons button.btn-run:hover {
-  background: rgba(0, 122, 255, 0.12);
+  background: var(--apple-blue-light);
 }
 
 .bottom-buttons button.btn-scroll {
@@ -877,6 +1002,10 @@ select.form-control:focus {
 
 .modal-backdrop.show {
   opacity: 1;
+}
+
+.modal.show .modal-dialog {
+  animation: scaleIn 0.25s ease both;
 }
 
 .modal-dialog {
@@ -1016,7 +1145,7 @@ select.form-control:focus {
   border: 1px solid var(--border-color) !important;
   box-shadow: var(--shadow-md);
   margin-bottom: 10px;
-  animation: toastSlideIn 0.3s ease forwards;
+  animation: toastSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
   overflow: hidden;
   border-left-width: 4px !important;
   border-left-style: solid !important;
@@ -1034,6 +1163,7 @@ select.form-control:focus {
   opacity: 0.6;
   background: none;
   border: none;
+  transition: opacity var(--transition-fast);
 }
 
 .toast .close:hover {
@@ -1058,7 +1188,7 @@ select.form-control:focus {
 
 @keyframes toastSlideIn {
   from {
-    transform: translateX(100%);
+    transform: translateX(40px);
     opacity: 0;
   }
   to {
@@ -1111,6 +1241,7 @@ select.form-control:focus {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   padding: 6px;
+  animation: fadeIn 0.15s ease both;
 }
 
 .dropdown-item {
@@ -1118,13 +1249,13 @@ select.form-control:focus {
   padding: 8px 12px;
   font-size: 0.8125rem;
   color: var(--text-primary);
-  transition: background-color var(--transition-fast);
+  transition: all var(--transition-fast);
 }
 
 .dropdown-item:hover,
 .dropdown-item:focus {
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
+  background-color: var(--apple-blue-light);
+  color: var(--apple-blue);
 }
 
 /* Task suggestions dropdown */
@@ -1183,19 +1314,23 @@ select.form-control:focus {
    ===================== */
 .page-footer {
   text-align: center;
-  padding: var(--spacing-lg) var(--spacing-md);
+  padding: var(--spacing-xl) var(--spacing-md) var(--spacing-lg);
   color: var(--text-tertiary);
   font-size: 0.75rem;
+  animation: fadeIn 0.5s ease 0.4s both;
 }
 
 .page-footer a {
   color: var(--text-secondary);
   margin: 0 10px;
-  transition: color var(--transition-fast);
+  transition: all var(--transition-fast);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
 }
 
 .page-footer a:hover {
   color: var(--apple-blue);
+  background: var(--apple-blue-light);
 }
 
 .page-footer p {
@@ -1237,7 +1372,23 @@ table.jsoneditor-tree > tbody > tr.jsoneditor-expandable:first-child {
 /* Task add area */
 .task-add-area {
   text-align: center;
-  padding: var(--spacing-lg) 0;
+  padding: var(--spacing-xl) 0;
+  animation: fadeIn 0.4s ease 0.2s both;
+}
+
+.task-add-area .btn-group .btn {
+  padding: 10px 24px;
+  font-size: 0.875rem;
+}
+
+.task-add-area .btn-group .btn:first-child {
+  border-top-left-radius: var(--radius-lg);
+  border-bottom-left-radius: var(--radius-lg);
+}
+
+.task-add-area .btn-group .btn:last-child {
+  border-top-right-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
 }
 
 /* QR tutorial popup */
@@ -1282,9 +1433,17 @@ table.jsoneditor-tree > tbody > tr.jsoneditor-expandable:first-child {
     height: 48px;
   }
 
+  .apple-navbar .navbar-brand {
+    font-size: 1rem;
+  }
+
   .segmented-control .seg-btn {
     padding: 5px 14px;
     font-size: 0.75rem;
+  }
+
+  .segmented-control .seg-btn i {
+    display: none;
   }
 
   .config-card-header {
@@ -1311,6 +1470,11 @@ table.jsoneditor-tree > tbody > tr.jsoneditor-expandable:first-child {
     padding: var(--spacing-sm) var(--spacing-md);
   }
 
+  .bottom-buttons {
+    bottom: 16px;
+    padding: 5px 6px;
+  }
+
   .bottom-buttons button {
     width: 38px;
     height: 38px;
@@ -1331,6 +1495,26 @@ table.jsoneditor-tree > tbody > tr.jsoneditor-expandable:first-child {
 
   .col-form-label {
     font-size: 0.8125rem;
+  }
+
+  .navbar-actions a span {
+    display: none;
+  }
+
+  .toast-container {
+    width: 280px;
+    right: 10px;
+    top: 58px;
+  }
+
+  .page-footer a {
+    margin: 0 6px;
+  }
+
+  /* Disable hover animations on touch */
+  .config-card:hover,
+  .task-card:hover {
+    transform: none;
   }
 }
 
@@ -1435,6 +1619,22 @@ table.jsoneditor-tree > tbody > tr.jsoneditor-expandable:first-child {
   pre {
     color: var(--text-primary);
   }
+
+  /* Better dark mode focus ring */
+  .form-control:focus,
+  .form-select:focus {
+    box-shadow: 0 0 0 3px var(--apple-blue-light);
+  }
+
+  /* Toast dark enhancement */
+  .toast {
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* Modal dark enhancement */
+  .modal-content {
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
 }
 
 /* =====================
@@ -1479,4 +1679,109 @@ select:disabled {
   background-color: var(--bg-tertiary) !important;
   cursor: not-allowed;
   opacity: 0.7;
+}
+
+/* =====================
+   23. Enhanced Interactions
+   ===================== */
+
+/* Smooth collapse transition */
+.collapse {
+  transition: none;
+}
+
+.collapsing {
+  transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Badge animations */
+.badge {
+  transition: all var(--transition-fast);
+}
+
+.badge:hover {
+  transform: scale(1.05);
+}
+
+/* Improved table row interactions */
+.table-hover tbody tr {
+  transition: background-color var(--transition-fast);
+}
+
+.table-hover tbody tr:hover td {
+  color: var(--text-primary);
+}
+
+/* Card hover lift for accounts cards */
+.config-card-body .card {
+  transition: all var(--transition-fast);
+}
+
+.config-card-body .card:hover {
+  box-shadow: var(--shadow-sm);
+  border-color: var(--apple-blue);
+}
+
+/* Improved alert styling */
+.alert {
+  animation: fadeIn 0.3s ease both;
+}
+
+/* Better spinner appearance */
+.spinner-border {
+  color: var(--apple-blue);
+}
+
+.spinner-border-sm {
+  border-width: 2px;
+}
+
+/* Selection color */
+::selection {
+  background: var(--apple-blue-light);
+  color: var(--text-primary);
+}
+
+/* Smooth page load */
+.main-content {
+  animation: fadeIn 0.3s ease both;
+}
+
+/* Tooltip enhancement */
+.tooltip {
+  font-family: var(--font-family);
+}
+
+.tooltip-inner {
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  padding: 6px 10px;
+}
+
+.tooltip .arrow::before {
+  border-top-color: var(--border-color);
+}
+
+/* Print styles */
+@media print {
+  .apple-navbar,
+  .bottom-buttons,
+  .toast-container {
+    display: none !important;
+  }
+  
+  body {
+    padding-bottom: 0;
+  }
+  
+  .config-card,
+  .task-card {
+    break-inside: avoid;
+    box-shadow: none;
+    border: 1px solid #ddd;
+  }
 }
