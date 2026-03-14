@@ -97,10 +97,14 @@ class SyncSchedulerManager:
         )
         return summary
 
-    def run_task_now(self, task_config, log_callback=None):
+    def run_task_now(self, task_config, log_callback=None,
+                     cancel_event=None, synced_files_tracker=None, structured_log=False):
         """
         立即执行同步任务（在当前线程中执行）。
         log_callback: 日志回调函数，用于 SSE 流式输出。
+        cancel_event: threading.Event，用于外部取消信号。
+        synced_files_tracker: 列表，记录本次已同步文件路径（用于回滚）。
+        structured_log: 是否使用结构化日志回调。
         """
         push_config = self._get_push_config()
         engine = FileSyncEngine(
@@ -108,6 +112,9 @@ class SyncSchedulerManager:
             db=self.db,
             base_dir=self.base_dir,
             push_config=push_config,
+            cancel_event=cancel_event,
+            synced_files_tracker=synced_files_tracker,
+            structured_log=structured_log,
         )
         return engine.execute(log_callback=log_callback)
 

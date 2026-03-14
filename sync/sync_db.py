@@ -90,20 +90,19 @@ class SyncDB:
 
     # ========== 任务锁管理 ==========
 
-    def cleanup_stale_locks(self, timeout=1800):
+    def cleanup_stale_locks(self):
         """
-        清理所有过期的任务锁（启动时调用）。
-        将所有 status='running' 且锁时间超过 timeout 的任务重置为 idle。
+        清理所有残留的任务锁（仅在启动时调用）。
+        程序刚启动时不可能有任何任务在运行，所有 running 状态都是
+        上次进程异常中断遗留的，无条件全部重置为 idle。
         """
         with self._lock:
             conn = self._get_conn()
             try:
-                cutoff = time.time() - timeout
                 cursor = conn.execute(
                     """UPDATE sync_task_status
                        SET status = 'idle', lock_time = NULL
-                       WHERE status = 'running' AND (lock_time IS NULL OR lock_time < ?)""",
-                    (cutoff,),
+                       WHERE status = 'running'"""
                 )
                 released = cursor.rowcount
                 conn.commit()
@@ -544,3 +543,30 @@ class SyncDB:
                 logger.error(f"删除任务数据失败: {e}")
             finally:
                 conn.close()
+
+    def batch_delete_records(self, record_ids):
+        """批量删除同步记录，返回删除的记录数"""
+        if not record_ids:
+            return 0
+        total_deleted = 0
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                # 分批删除，每批 500 个，避免 SQLite 参数限制
+                batch_size = 500
+                for i in range(0, len(record_ids), batch_size):
+                    batch = record_ids[i:i + batch_size]
+                    placeholders = ",".join("?" * len(batch))
+                    cursor = conn.execute(
+                        f"DELETE FROM sync_records WHERE id IN ({placeholders})",
+                        batch,
+                    )
+                    total_deleted += cursor.rowcount
+                conn.commit()
+                if total_deleted:
+                    logger.info(f"已批量删除 {total_deleted} 条同步记录")
+            except Exception as e:
+                logger.error(f"批量删除同步记录失败: {e}")
+            finally:
+                conn.close()
+        return total_deleted

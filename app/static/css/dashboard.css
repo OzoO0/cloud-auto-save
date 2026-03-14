@@ -991,6 +991,14 @@ select.form-control:focus {
   background: rgba(142, 142, 147, 0.12);
 }
 
+.bottom-buttons button.btn-cancel-all {
+  color: var(--apple-red);
+}
+
+.bottom-buttons button.btn-cancel-all:hover {
+  background: var(--apple-red-light);
+}
+
 /* =====================
    11. Modals
    ===================== */
@@ -2541,6 +2549,226 @@ select:disabled {
   font-size: 0.7rem;
   color: var(--text-tertiary);
   white-space: nowrap;
+}
+
+/* =====================
+   32. Sync Task Running Lock
+   ===================== */
+.sync-task-running .task-card-body {
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+}
+
+.sync-task-running .sync-card-actions .btn {
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+/* =====================
+   33. Sync Log Statistics Panel
+   ===================== */
+.sync-log-stats {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--separator-color);
+  background: var(--bg-secondary);
+}
+
+.sync-log-stat-cards {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.sync-log-stat-card {
+  flex: 1;
+  text-align: center;
+  padding: 8px 6px;
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+}
+
+.sync-log-stat-card .stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.sync-log-stat-card .stat-label {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.sync-log-stat-card.stat-success .stat-value {
+  color: var(--apple-green);
+}
+
+.sync-log-stat-card.stat-skip .stat-value {
+  color: var(--apple-orange);
+}
+
+.sync-log-stat-card.stat-fail .stat-value {
+  color: var(--apple-red);
+}
+
+.sync-log-progress-bar {
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.sync-log-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--apple-blue), var(--apple-green));
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.sync-log-progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+/* =====================
+   34. Sync Log View Toggle
+   ===================== */
+.sync-log-view-toggle {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  margin-right: 12px;
+}
+
+.sync-log-view-toggle .btn {
+  padding: 2px 8px;
+  font-size: 0.8rem;
+}
+
+/* =====================
+   35. Sync Log File List
+   ===================== */
+.sync-log-file-list {
+  padding: 0;
+}
+
+.sync-log-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 0.8125rem;
+  border-bottom: 1px solid var(--separator-color);
+  transition: background var(--transition-fast);
+}
+
+.sync-log-file-item:last-child {
+  border-bottom: none;
+}
+
+.sync-log-file-item:hover {
+  background: var(--bg-secondary);
+}
+
+.sync-log-file-item > i {
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  width: 16px;
+  text-align: center;
+}
+
+.sync-log-file-item.file-syncing > i {
+  color: var(--apple-blue);
+}
+
+.sync-log-file-item.file-success > i {
+  color: var(--apple-green);
+}
+
+.sync-log-file-item.file-skipped > i {
+  color: var(--text-tertiary);
+}
+
+.sync-log-file-item.file-failed > i {
+  color: var(--apple-red);
+}
+
+.sync-log-file-item.file-pending > i {
+  color: var(--border-color-strong);
+}
+
+.sync-log-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.sync-log-file-size {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sync-log-file-msg {
+  font-size: 0.7rem;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* =====================
+   36. Sync Batch Actions
+   ===================== */
+.sync-batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--separator-color);
+  font-size: 0.8125rem;
+}
+
+.sync-batch-actions span {
+  font-size: 0.8rem;
+}
+
+/* =====================
+   37. Sync Tree Dir Delete
+   ===================== */
+.sync-tree-dir-delete {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.sync-tree-dir:hover .sync-tree-dir-delete {
+  opacity: 1;
+}
+
+/* =====================
+   38. Sync Records Selected Row
+   ===================== */
+.sync-records-table tr.selected td {
+  background: var(--apple-blue-light);
+}
+
+.sync-records-table th input[type="checkbox"],
+.sync-records-table td input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--apple-blue);
 }
 
 /* =====================

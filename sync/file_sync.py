@@ -3,6 +3,7 @@
 
 import os
 import re
+import json
 import time
 import shutil
 import hashlib
@@ -19,19 +20,24 @@ FILE_TYPE_EXTENSIONS = {
     "image": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".tiff", ".raw", ".heic"},
     "document": {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".csv"},
     "subtitle": {".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".sup"},
+    "nfo": {".nfo"},
 }
 
 
 class FileSyncEngine:
     """本地文件同步引擎"""
 
-    def __init__(self, task_config, db, base_dir, push_config=None):
+    def __init__(self, task_config, db, base_dir, push_config=None,
+                 cancel_event=None, synced_files_tracker=None, structured_log=False):
         """
         Args:
             task_config: 同步任务配置字典
             db: SyncDB 实例
             base_dir: datafiles 基础目录的绝对路径
             push_config: 推送配置字典（可选）
+            cancel_event: threading.Event，用于外部取消信号（可选）
+            synced_files_tracker: 列表，记录本次运行中已成功复制的文件路径（可选）
+            structured_log: 是否使用结构化日志回调模式（可选）
         """
         self.task = task_config
         self.db = db
@@ -39,6 +45,9 @@ class FileSyncEngine:
         self.push_config = push_config or {}
         self.task_id = task_config.get("task_id", "")
         self.taskname = task_config.get("taskname", "未命名任务")
+        self.cancel_event = cancel_event
+        self.synced_files_tracker = synced_files_tracker
+        self.structured_log = structured_log
 
         # 解析目录路径
         source_rel = task_config.get("source_dir", "")
@@ -73,6 +82,15 @@ class FileSyncEngine:
         logger.info(msg)
         if callback:
             callback(msg)
+
+    def _emit(self, event_type, data, callback=None):
+        """发送结构化事件（仅 structured_log 模式）"""
+        if callback and self.structured_log:
+            callback(json.dumps({"event": event_type, "data": data}, ensure_ascii=False))
+
+    def _is_cancelled(self):
+        """检查任务是否已被取消"""
+        return self.cancel_event is not None and self.cancel_event.is_set()
 
     def _validate_path(self, path):
         """验证路径不逃逸 base_dir"""
@@ -121,6 +139,11 @@ class FileSyncEngine:
             # 确保目标目录存在
             os.makedirs(self.dest_dir, exist_ok=True)
 
+            # 检查取消
+            if self._is_cancelled():
+                self._log("  任务已被用户取消", log_callback)
+                return self._build_summary("cancelled", "用户取消", time.time() - start_time)
+
             # 扫描文件
             files = self._scan_source_dir(log_callback)
             self._log(f"  扫描到 {len(files)} 个待处理文件", log_callback)
@@ -129,6 +152,12 @@ class FileSyncEngine:
                 msg = "没有需要同步的文件"
                 self._log(f"  {msg}", log_callback)
                 return self._build_summary("success", msg, time.time() - start_time)
+
+            # 发送 init 结构化事件
+            self._emit("init", {
+                "total": len(files),
+                "task_name": self.taskname,
+            }, log_callback)
 
             # 构建目标目录已有文件集合（用于文件匹配）
             dest_files = self._scan_dest_files()
@@ -141,11 +170,28 @@ class FileSyncEngine:
                 self._batch_compute_md5(files, log_callback)
 
             # 阶段 2：逐文件同步
-            for file_info in files:
+            cancelled = False
+            for idx, file_info in enumerate(files):
+                # 检查取消信号
+                if self._is_cancelled():
+                    cancelled = True
+                    self._log("  任务已被用户取消", log_callback)
+                    break
+
+                # 发送 file_start 结构化事件
+                self._emit("file_start", {
+                    "index": idx,
+                    "rel_path": file_info["rel_path"],
+                    "name": file_info["name"],
+                    "size": file_info.get("size", 0),
+                }, log_callback)
+
                 try:
-                    self._process_file(file_info, dest_files, log_callback)
+                    status, message = self._process_file(file_info, dest_files, log_callback)
                 except Exception as e:
                     self._failed += 1
+                    status = "failed"
+                    message = str(e)
                     self._log(f"  失败: {file_info['rel_path']} -> {e}", log_callback)
                     self.db.add_sync_record(
                         task_id=self.task_id,
@@ -157,22 +203,60 @@ class FileSyncEngine:
                         message=str(e),
                     )
 
+                # 发送 file_done 结构化事件
+                self._emit("file_done", {
+                    "index": idx,
+                    "rel_path": file_info["rel_path"],
+                    "status": status,
+                    "message": message,
+                }, log_callback)
+
+                # 发送 progress 结构化事件
+                processed = idx + 1
+                elapsed_now = time.time() - start_time
+                self._emit("progress", {
+                    "processed": processed,
+                    "total": len(files),
+                    "synced": self._synced,
+                    "skipped": self._skipped,
+                    "failed": self._failed,
+                    "elapsed": round(elapsed_now, 1),
+                }, log_callback)
+
             elapsed = time.time() - start_time
-            result = "success" if self._failed == 0 else "partial"
+
+            if cancelled:
+                result = "cancelled"
+                self._log(
+                    f"  已取消: 同步 {self._synced} | 跳过 {self._skipped} | 失败 {self._failed} | 耗时 {elapsed:.1f}s",
+                    log_callback,
+                )
+            else:
+                result = "success" if self._failed == 0 else "partial"
+                self._log(
+                    f"  完成: 同步 {self._synced} | 跳过 {self._skipped} | 失败 {self._failed} | 耗时 {elapsed:.1f}s",
+                    log_callback,
+                )
+
             summary = self._build_summary(result, "", elapsed)
 
-            self._log(
-                f"  完成: 同步 {self._synced} | 跳过 {self._skipped} | 失败 {self._failed} | 耗时 {elapsed:.1f}s",
-                log_callback,
-            )
+            # 发送 done 结构化事件
+            self._emit("done", {
+                "result": result,
+                "synced": self._synced,
+                "skipped": self._skipped,
+                "failed": self._failed,
+                "elapsed": round(elapsed, 1),
+            }, log_callback)
 
             # 更新任务状态
             self.db.update_task_result(
                 self.task_id, result, self._synced, self._skipped, self._failed
             )
 
-            # 发送通知
-            self._send_notification(summary)
+            # 发送通知（取消时不通知）
+            if not cancelled:
+                self._send_notification(summary)
 
             return summary
 
@@ -406,7 +490,7 @@ class FileSyncEngine:
     # ========== 文件处理 ==========
 
     def _process_file(self, file_info, dest_files, log_callback=None):
-        """处理单个文件的同步逻辑"""
+        """处理单个文件的同步逻辑，返回 (status, message)"""
         rel_path = file_info["rel_path"]
         fname = file_info["name"]
         dest_path = os.path.join(self.dest_dir, rel_path)
@@ -417,10 +501,11 @@ class FileSyncEngine:
         if not should_sync:
             self._skipped += 1
             logger.debug(f"  跳过: {rel_path} ({skip_reason})")
-            return
+            return "skipped", skip_reason
 
         # 执行同步
         self._sync_file(file_info, dest_path, log_callback)
+        return "success", ""
 
     def _should_sync(self, file_info, dest_files):
         """
@@ -514,6 +599,10 @@ class FileSyncEngine:
 
         self._synced += 1
 
+        # 记录已同步的文件路径（用于取消时回滚）
+        if self.synced_files_tracker is not None:
+            self.synced_files_tracker.append(dest_path)
+
         self._log(f"  同步: {file_info['rel_path']}", log_callback)
 
         # 记录到数据库
@@ -535,6 +624,8 @@ class FileSyncEngine:
         if summary["result"] == "success" and not self.notify_on_complete:
             return
         if summary["result"] in ("error", "partial") and not self.notify_on_error:
+            return
+        if summary["result"] == "cancelled":
             return
 
         try:

@@ -133,6 +133,11 @@ sync_db = None
 sync_manager = None
 DATAFILES_DIR = os.environ.get("DATAFILES_DIR", "./datafiles")
 
+# 同步任务取消信号管理
+_cancel_events = {}       # {task_id: threading.Event}
+_cancel_actions = {}      # {task_id: "keep"|"rollback"}
+_cancel_events_lock = threading.Lock()
+
 app = Flask(__name__)
 app.config["APP_VERSION"] = get_app_ver()
 app.secret_key = "ca943f6db6dd34823d36ab08d8d6f65d"
@@ -1233,7 +1238,7 @@ def save_sync_tasks():
 
 @app.route("/api/sync/run", methods=["POST"])
 def sync_run():
-    """立即执行同步任务（SSE 流式日志）"""
+    """立即执行同步任务（SSE 流式日志，支持结构化事件）"""
     if not is_login():
         return jsonify({"success": False, "message": "未登录"})
     if not sync_manager:
@@ -1252,17 +1257,57 @@ def sync_run():
         return jsonify({"success": False, "message": f"未找到任务: {task_id}"})
 
     log_queue = queue.Queue()
+    cancel_event = threading.Event()
+    synced_files_tracker = []
+
+    # 注册取消信号
+    with _cancel_events_lock:
+        _cancel_events[task_id] = cancel_event
 
     def log_callback(msg):
         log_queue.put(msg)
 
     def run_in_thread():
+        summary = None
         try:
-            sync_manager.run_task_now(task_config, log_callback=log_callback)
+            summary = sync_manager.run_task_now(
+                task_config, log_callback=log_callback,
+                cancel_event=cancel_event,
+                synced_files_tracker=synced_files_tracker,
+                structured_log=True,
+            )
         except Exception as e:
             log_queue.put(f"任务执行异常: {e}")
         finally:
-            log_queue.put("[DONE]")
+            # 处理回滚
+            cancelled = cancel_event.is_set()
+            action = _cancel_actions.pop(task_id, "keep")
+            if cancelled and action == "rollback" and synced_files_tracker:
+                log_queue.put("[数据同步] 正在回滚已同步文件...")
+                rollback_count = 0
+                for fpath in synced_files_tracker:
+                    try:
+                        if os.path.exists(fpath):
+                            os.remove(fpath)
+                            rollback_count += 1
+                    except OSError as e:
+                        logging.error(f"回滚删除文件失败: {fpath} -> {e}")
+                log_queue.put(f"[数据同步] 已回滚 {rollback_count} 个文件")
+                # 清理对应的数据库记录
+                if sync_db and rollback_count > 0:
+                    try:
+                        sync_db.cleanup_records(task_id)
+                    except Exception:
+                        pass
+
+            # 清理取消信号
+            with _cancel_events_lock:
+                _cancel_events.pop(task_id, None)
+
+            if cancelled:
+                log_queue.put("[CANCELLED]")
+            else:
+                log_queue.put("[DONE]")
 
     thread = threading.Thread(target=run_in_thread, daemon=True)
     thread.start()
@@ -1274,6 +1319,19 @@ def sync_run():
                 if msg == "[DONE]":
                     yield "data: [DONE]\n\n"
                     break
+                elif msg == "[CANCELLED]":
+                    yield "data: [CANCELLED]\n\n"
+                    break
+                # 检查是否是结构化事件 JSON
+                if msg.startswith("{"):
+                    try:
+                        evt = json.loads(msg)
+                        event_type = evt.get("event", "log")
+                        data_str = json.dumps(evt.get("data", {}), ensure_ascii=False)
+                        yield f"event: {event_type}\ndata: {data_str}\n\n"
+                        continue
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
                 yield f"data: {msg}\n\n"
             except Exception:
                 yield "data: [TIMEOUT]\n\n"
@@ -1447,6 +1505,70 @@ def sync_release_lock():
         return jsonify({"success": True, "message": "任务锁已释放"})
     except Exception as e:
         logging.error(f">>> 释放任务锁失败: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/sync/cancel", methods=["POST"])
+def sync_cancel():
+    """取消运行中的同步任务"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+
+    task_id = request.json.get("task_id", "")
+    action = request.json.get("action", "keep")  # "keep" 或 "rollback"
+    cancelled = []
+
+    with _cancel_events_lock:
+        if task_id == "__all__":
+            for tid, evt in _cancel_events.items():
+                evt.set()
+                _cancel_actions[tid] = action
+                cancelled.append(tid)
+        elif task_id in _cancel_events:
+            _cancel_events[task_id].set()
+            _cancel_actions[task_id] = action
+            cancelled.append(task_id)
+
+    if cancelled:
+        logging.info(f">>> 已发送取消信号: {cancelled}, action={action}")
+        return jsonify({
+            "success": True,
+            "message": f"已取消 {len(cancelled)} 个任务",
+            "data": {"cancelled": cancelled}
+        })
+    else:
+        return jsonify({"success": False, "message": "没有找到运行中的任务"})
+
+
+@app.route("/api/sync/records/batch-delete", methods=["POST"])
+def batch_delete_sync_records():
+    """批量删除同步记录"""
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据同步模块未初始化"})
+
+    record_ids = request.json.get("record_ids", [])
+    if not record_ids or not isinstance(record_ids, list):
+        return jsonify({"success": False, "message": "缺少有效的 record_ids 参数"})
+    if len(record_ids) > 2000:
+        return jsonify({"success": False, "message": "单次最多删除 2000 条记录"})
+
+    # 确保所有 ID 为整数
+    try:
+        record_ids = [int(rid) for rid in record_ids]
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "message": "record_ids 中包含无效值"})
+
+    try:
+        deleted = sync_db.batch_delete_records(record_ids)
+        return jsonify({
+            "success": True,
+            "message": f"已删除 {deleted} 条记录",
+            "data": {"deleted": deleted}
+        })
+    except Exception as e:
+        logging.error(f">>> 批量删除同步记录失败: {e}")
         return jsonify({"success": False, "message": str(e)})
 
 
