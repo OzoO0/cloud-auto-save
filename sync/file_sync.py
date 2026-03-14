@@ -132,6 +132,9 @@ class FileSyncEngine:
 
             # 构建目标目录已有文件集合（用于文件匹配）
             dest_files = self._scan_dest_files()
+            dest_count = len(dest_files["paths"])
+            if dest_count:
+                self._log(f"  目标目录已有 {dest_count} 个文件", log_callback)
 
             # 阶段 1：MD5 预计算（仅 md5 模式且启用缓存时）
             if self.match_mode == "md5" and self.md5_cache_enabled:
@@ -250,6 +253,9 @@ class FileSyncEngine:
 
         for root, dirs, filenames in os.walk(self.dest_dir):
             for fname in filenames:
+                # 跳过残留的临时下载文件
+                if fname.startswith(".") and fname.endswith(".download"):
+                    continue
                 full_path = os.path.join(root, fname)
                 rel_path = os.path.relpath(full_path, self.dest_dir)
                 result["full_names"].add(fname)
@@ -406,10 +412,11 @@ class FileSyncEngine:
         dest_path = os.path.join(self.dest_dir, rel_path)
 
         # 检查是否需要同步
-        should_sync = self._should_sync(file_info, dest_files)
+        should_sync, skip_reason = self._should_sync(file_info, dest_files)
 
         if not should_sync:
             self._skipped += 1
+            logger.debug(f"  跳过: {rel_path} ({skip_reason})")
             return
 
         # 执行同步
@@ -419,63 +426,92 @@ class FileSyncEngine:
         """
         判断文件是否需要同步。
         结合数据库记录和目标目录实际文件进行判断。
+        返回 (should_sync: bool, reason: str)
         """
         fname = file_info["name"]
         rel_path = file_info["rel_path"]
 
         if self.sync_mode == "overwrite":
-            # 覆盖模式：始终同步
-            return True
+            return True, ""
 
         # 增量模式：检查是否已存在
         if self.match_mode == "full_name":
-            # 先检查目标目录中是否有同名文件
             if rel_path in dest_files["paths"]:
-                return False
-            # 再检查数据库记录
+                return False, "目标路径已存在"
             if self.db.is_file_synced(self.task_id, rel_path, fname, "full_name"):
-                return False
-            return True
+                return False, "数据库记录已同步"
+            return True, ""
 
         elif self.match_mode == "name_only":
             name_no_ext = os.path.splitext(fname)[0]
-            # 检查目标目录中是否有去扩展名后相同的文件
             if name_no_ext in dest_files["names_no_ext"]:
-                return False
+                return False, "目标存在同名文件(忽略扩展名)"
             if self.db.is_file_synced(self.task_id, rel_path, fname, "name_only"):
-                return False
-            return True
+                return False, "数据库记录已同步(忽略扩展名)"
+            return True, ""
 
         elif self.match_mode == "md5":
-            # 先检查目标目录中是否已存在该路径的文件
-            if rel_path in dest_files["paths"]:
-                return False
-            # MD5 值已在 _batch_compute_md5 阶段预填充
             file_md5 = file_info.get("md5")
             if not file_md5:
-                # fallback: 预计算阶段失败或未启用缓存，此处重试
                 try:
                     file_md5 = self._compute_md5(file_info["full_path"])
                     file_info["md5"] = file_md5
                 except Exception as e:
-                    logger.error(f"MD5 fallback 计算失败: {file_info['full_path']} -> {e}")
-                    return True  # 无法计算，安全起见执行同步
-            if self.db.is_file_synced(self.task_id, rel_path, fname, "md5", file_md5):
-                return False
-            return True
+                    logger.error(f"MD5 计算失败: {file_info['full_path']} -> {e}")
+                    return True, ""
 
-        return True
+            # 目标路径存在时：快速指纹比较
+            if rel_path in dest_files["paths"]:
+                dest_path = dest_files["paths"][rel_path]
+                try:
+                    # 快速检查：文件大小不同则内容必定不同
+                    dest_size = os.path.getsize(dest_path)
+                    src_size = file_info.get("size", 0)
+                    if src_size != dest_size:
+                        logger.debug(f"  MD5模式: {rel_path} 大小不同(源={src_size}, 目标={dest_size})，需同步")
+                        return True, ""
+                    # 大小一致：用快速指纹比较（头+中+尾各1MB）
+                    src_fp = self._compute_quick_fingerprint(file_info["full_path"])
+                    dest_fp = self._compute_quick_fingerprint(dest_path)
+                    if src_fp == dest_fp:
+                        return False, f"快速指纹一致({src_fp[3:11]}...)"
+                    else:
+                        logger.debug(f"  MD5模式: {rel_path} 指纹不同，需同步")
+                        return True, ""
+                except OSError as e:
+                    logger.warning(f"  MD5模式: 无法读取目标文件 {dest_path}: {e}，执行同步")
+                    return True, ""
+
+            # 目标路径不存在：查数据库
+            if self.db.is_file_synced(self.task_id, rel_path, fname, "md5", file_md5):
+                return False, f"数据库记录MD5已同步({file_md5[:8]}...)"
+            return True, ""
+
+        return True, ""
 
     def _sync_file(self, file_info, dest_path, log_callback=None):
-        """执行单文件复制"""
+        """执行单文件复制（原子性写入：临时文件 → 重命名）"""
         src_path = file_info["full_path"]
 
         # 确保目标子目录存在
         dest_dir = os.path.dirname(dest_path)
         os.makedirs(dest_dir, exist_ok=True)
 
-        # 复制文件（保留元数据）
-        shutil.copy2(src_path, dest_path)
+        # 原子性写入：先写临时文件，完成后重命名
+        fname = os.path.basename(dest_path)
+        tmp_path = os.path.join(dest_dir, f".{fname}.download")
+        try:
+            shutil.copy2(src_path, tmp_path)
+            # 重命名（同文件系统内为原子操作）
+            os.replace(tmp_path, dest_path)
+        except BaseException:
+            # 清理残留临时文件
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
+
         self._synced += 1
 
         self._log(f"  同步: {file_info['rel_path']}", log_callback)

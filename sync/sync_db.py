@@ -90,6 +90,32 @@ class SyncDB:
 
     # ========== 任务锁管理 ==========
 
+    def cleanup_stale_locks(self, timeout=1800):
+        """
+        清理所有过期的任务锁（启动时调用）。
+        将所有 status='running' 且锁时间超过 timeout 的任务重置为 idle。
+        """
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cutoff = time.time() - timeout
+                cursor = conn.execute(
+                    """UPDATE sync_task_status
+                       SET status = 'idle', lock_time = NULL
+                       WHERE status = 'running' AND (lock_time IS NULL OR lock_time < ?)""",
+                    (cutoff,),
+                )
+                released = cursor.rowcount
+                conn.commit()
+                if released:
+                    logger.warning(f"启动清理：释放了 {released} 个残留任务锁")
+                return released
+            except Exception as e:
+                logger.error(f"清理残留锁失败: {e}")
+                return 0
+            finally:
+                conn.close()
+
     def acquire_lock(self, task_id, timeout=1800):
         """
         获取任务锁。

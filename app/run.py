@@ -458,6 +458,10 @@ def run_script_now():
     return Response(
         stream_with_context(generate_output()),
         content_type="text/event-stream;charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -1278,6 +1282,10 @@ def sync_run():
     return Response(
         stream_with_context(generate_output()),
         content_type="text/event-stream;charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -1579,6 +1587,7 @@ def init():
         from sync import SyncDB, SyncSchedulerManager
         db_path = os.path.join(os.path.dirname(CONFIG_PATH), "sync_records.db")
         sync_db = SyncDB(db_path)
+        sync_db.cleanup_stale_locks()
         datafiles_abs = os.path.realpath(DATAFILES_DIR)
         if not os.path.exists(datafiles_abs):
             os.makedirs(datafiles_abs)

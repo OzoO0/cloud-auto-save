@@ -2428,7 +2428,7 @@
           axios.get('/api/sync/status')
             .then(response => {
               if (response.data.success) {
-                this.syncTaskStatus = response.data.data || {};
+                this.syncTaskStatus = response.data.data.task_status || {};
               }
             })
             .catch(error => {
@@ -2507,6 +2507,13 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ task_id: task.task_id })
           }).then(response => {
+            if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream')) {
+              return response.json().then(data => {
+                this.syncRunLog += (data.message || '请求失败') + '\n';
+                this.syncModalLoading = false;
+                this.$set(this.syncRunning, task.task_id, false);
+              });
+            }
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             const readChunk = () => {
