@@ -8,7 +8,16 @@ import logging
 import sys
 import os
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def _beijing_time_converter(ts):
+    return datetime.fromtimestamp(ts, _BEIJING_TZ).timetuple()
+
+
+logging.Formatter.converter = staticmethod(_beijing_time_converter)
 
 
 class LogFormatter(logging.Formatter):

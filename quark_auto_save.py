@@ -19,8 +19,21 @@ import importlib
 import traceback
 import urllib.parse
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from natsort import natsort,natsorted
+
+_BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def _beijing_time_converter(ts):
+    return datetime.fromtimestamp(ts, _BEIJING_TZ).timetuple()
+
+
+logging.Formatter.converter = staticmethod(_beijing_time_converter)
+
+
+def _bj_now():
+    return datetime.now(_BEIJING_TZ)
 
 # 导入日志工具
 try:
@@ -338,7 +351,7 @@ class MagicRename:
                                 [char for char in value if char.isdigit()]
                             )
                             value = (
-                                str(datetime.now().year)[: (8 - len(value))] + value
+                                str(_bj_now().year)[: (8 - len(value))] + value
                             )
                         replace = replace.replace(key, value)
                         matched = True
@@ -800,7 +813,7 @@ class Quark:
             "uc_param_str": "",
             "app": "clouddrive",
             "__dt": int(random.uniform(1, 5) * 60 * 1000),
-            "__t": datetime.now().timestamp(),
+            "__t": _bj_now().timestamp(),
         }
         payload = {
             "fid_list": fid_list,
@@ -827,7 +840,7 @@ class Quark:
                 "task_id": task_id,
                 "retry_index": retry_index,
                 "__dt": int(random.uniform(1, 5) * 60 * 1000),
-                "__t": datetime.now().timestamp(),
+                "__t": _bj_now().timestamp(),
             }
             response = self._send_request("GET", url, params=querystring).json()
             if response["status"] != 200:
@@ -941,7 +954,7 @@ class Quark:
             for item in tasklist
             if not item.get("enddate")
             or (
-                datetime.now().date()
+                _bj_now().date()
                 <= datetime.strptime(item["enddate"], "%Y-%m-%d").date()
             )
         ]
@@ -1354,7 +1367,7 @@ def do_save(account, tasklist=[]):
         return (
             not task.get("enddate")
             or (
-                datetime.now().date()
+                _bj_now().date()
                 <= datetime.strptime(task["enddate"], "%Y-%m-%d").date()
             )
         ) and (
@@ -1458,7 +1471,7 @@ def do_save_multi_drive(account_manager, tasklist=[]):
         return (
             not task.get("enddate")
             or (
-                datetime.now().date()
+                _bj_now().date()
                 <= datetime.strptime(task["enddate"], "%Y-%m-%d").date()
             )
         ) and (
@@ -1864,7 +1877,7 @@ def _get_file_icon(f):
 
 def main():
     global CONFIG_DATA
-    start_time = datetime.now()
+    start_time = _bj_now()
     print(f"===============程序开始===============")
     print(f"[*] 执行时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print()
@@ -1876,7 +1889,7 @@ def main():
         CONFIG_DATA["push_config"] = json.loads(os.environ.get("PUSH_CONFIG"))
         send_ql_notify(
             "【夸克自动转存】",
-            f"通知测试\n\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"通知测试\n\n{_bj_now().strftime('%Y-%m-%d %H:%M:%S')}",
         )
         print()
         if cookies := json.loads(os.environ.get("COOKIE", "[]")):
@@ -1981,7 +1994,7 @@ def main():
         Config.write_json(config_path, CONFIG_DATA)
 
     print(f"===============程序结束===============")
-    duration = datetime.now() - start_time
+    duration = _bj_now() - start_time
     print(f"😃 运行时长: {round(duration.total_seconds(), 2)}s")
     print()
 

@@ -614,7 +614,7 @@
             </div>
 
             <!-- 同步任务卡片列表 -->
-            <div v-for="(task, index) in syncTasks" :key="'sync_'+index" class="task-card" :class="{'sync-task-running': syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'running'), 'disabled': task.enabled === false}">
+            <div v-for="(task, index) in syncTasks" :key="'sync_'+index" class="task-card" :class="{'sync-task-running': syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && (syncTaskStatus[task.task_id].status === 'running' || syncTaskStatus[task.task_id].status === 'stopping')), 'disabled': task.enabled === false}">
               <div class="task-card-header" @click="handleSyncCardClick(task, index)" style="cursor:pointer">
                 <div class="task-info">
                   <span class="collapse-arrow"><i class="bi" :class="task._expanded ? 'bi-caret-down-fill' : 'bi-caret-right-fill'"></i></span>
@@ -628,15 +628,17 @@
                   <span class="task-name" :class="{'text-muted': task.enabled === false}">{{ task.taskname || '未命名任务' }}</span>
                   <span class="sync-mode-badge" :class="task.sync_mode">{{ task.sync_mode === 'incremental' ? '增量' : '覆盖' }}</span>
                   <span v-if="!task.enabled" class="badge badge-secondary" style="font-size:0.65rem">已禁用</span>
-                  <span class="sync-running-badge" v-if="syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'running')">
-                    <i class="bi bi-arrow-repeat spin"></i> 运行中
+                  <span class="sync-running-badge" v-if="syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && (syncTaskStatus[task.task_id].status === 'running' || syncTaskStatus[task.task_id].status === 'stopping'))">
+                    <i class="bi bi-arrow-repeat spin" v-if="!(syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'stopping')"></i>
+                    <i class="bi bi-hourglass-split spin" v-else></i>
+                    {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'stopping') ? '停止中' : '运行中' }}
                   </span>
                   <span class="last-run" v-else-if="syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].last_run_time">
                     上次: {{ $options.filters.ts2date(syncTaskStatus[task.task_id].last_run_time) }}
                   </span>
                 </div>
                 <div class="task-actions" @click.stop>
-                  <button v-if="isSyncTaskRunning(task.task_id)" type="button" class="btn btn-outline-danger btn-sm" @click="cancelSyncTask(task.task_id)" title="中断任务">
+                  <button v-if="isSyncTaskRunning(task.task_id)" type="button" class="btn btn-outline-danger btn-sm" @click="cancelSyncTask(task.task_id)" :disabled="syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'stopping'" :title="(syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'stopping') ? '停止中' : '中断任务'">
                     <i class="bi bi-stop-fill"></i>
                   </button>
                   <button v-else type="button" class="btn btn-outline-primary btn-sm" @click="runSyncTask(index)" :title="'立即执行'">
@@ -652,12 +654,18 @@
               </div>
 
               <!-- 运行中进度条（始终显示，不受展开状态影响） -->
-              <div class="sync-running-bar" v-if="syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'running')">
+              <div class="sync-running-bar" v-if="syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && (syncTaskStatus[task.task_id].status === 'running' || syncTaskStatus[task.task_id].status === 'stopping'))">
                 <div class="sync-running-indicator">
                   <div class="sync-running-progress"></div>
                 </div>
                 <div class="sync-running-info">
-                  <span class="sync-running-text"><i class="bi bi-hourglass-split spin"></i> 正在同步中... 同步 {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].files_synced) || 0 }} 跳过 {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].files_skipped) || 0 }} 失败 {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].files_failed) || 0 }}</span>
+                  <span class="sync-running-text">
+                    <i class="bi bi-hourglass-split spin"></i>
+                    {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'stopping') ? '正在停止...' : '正在同步中...' }}
+                    同步 {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].files_synced) || 0 }}
+                    跳过 {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].files_skipped) || 0 }}
+                    失败 {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].files_failed) || 0 }}
+                  </span>
                   <button type="button" class="btn btn-link btn-sm sync-view-log-btn" @click.stop="runSyncTask_viewLog(task.task_id)">
                     <i class="bi bi-terminal"></i> 查看日志
                   </button>
@@ -839,9 +847,6 @@
             <h5 class="modal-title"><b>运行日志</b>
               <div v-if="modalLoading" class="spinner-border spinner-border-sm m-1" role="status"></div>
             </h5>
-            <div class="ml-auto mr-2 d-flex" style="gap:6px">
-              <button type="button" class="btn btn-outline-danger btn-sm" @click="stopSchedulerRun()">停止定时任务</button>
-            </div>
             <button type="button" class="close" data-dismiss="modal" aria-label="Close">
               <span aria-hidden="true">&times;</span>
             </button>
@@ -1263,7 +1268,7 @@
             <div v-if="syncLogData.viewMode === 'list' && syncLogData.files.length > 0" class="sync-log-file-list" style="max-height:350px;overflow-y:auto">
               <div v-for="(f, fi) in syncLogData.files" :key="fi" class="sync-log-file-item" :class="'file-' + f.status">
                 <i class="bi" :class="{'bi-hourglass-split spin': f.status === 'syncing', 'bi-check-circle-fill': f.status === 'success', 'bi-dash-circle': f.status === 'skipped', 'bi-x-circle-fill': f.status === 'failed', 'bi-circle': f.status === 'pending'}"></i>
-                <span class="sync-log-file-name" :title="f.rel_path">{{ f.name }}</span>
+                <span class="sync-log-file-name" :title="f.rel_path || f.name">{{ f.rel_path || f.name }}</span>
                 <span class="sync-log-file-size">{{ $options.filters.size(f.size) }}</span>
                 <span v-if="f.message" class="sync-log-file-msg text-muted">{{ f.message }}</span>
               </div>
@@ -1281,13 +1286,13 @@
                 <div v-show="syncLogData.treeExpanded[node.path]" v-if="node.type === 'dir'">
                   <div v-for="(f, fi) in node.children" :key="fi" class="sync-log-file-item" :class="'file-' + f.status" style="padding-left:28px">
                     <i class="bi" :class="{'bi-hourglass-split spin': f.status === 'syncing', 'bi-check-circle-fill': f.status === 'success', 'bi-dash-circle': f.status === 'skipped', 'bi-x-circle-fill': f.status === 'failed', 'bi-circle': f.status === 'pending'}"></i>
-                    <span class="sync-log-file-name">{{ f.name }}</span>
+                    <span class="sync-log-file-name">{{ f.rel_path || f.name }}</span>
                     <span class="sync-log-file-size">{{ $options.filters.size(f.size) }}</span>
                   </div>
                 </div>
                 <div v-if="node.type === 'file'" class="sync-log-file-item" :class="'file-' + node.status">
                   <i class="bi" :class="{'bi-hourglass-split spin': node.status === 'syncing', 'bi-check-circle-fill': node.status === 'success', 'bi-dash-circle': node.status === 'skipped', 'bi-x-circle-fill': node.status === 'failed', 'bi-circle': node.status === 'pending'}"></i>
-                  <span class="sync-log-file-name">{{ node.name }}</span>
+                  <span class="sync-log-file-name">{{ node.rel_path || node.name }}</span>
                   <span class="sync-log-file-size">{{ $options.filters.size(node.size) }}</span>
                 </div>
               </div>
@@ -2066,18 +2071,6 @@
             console.error('Error:', error);
           }
         },
-        async stopSchedulerRun() {
-          try {
-            const resp = await axios.post('/api/scheduler/stop', {});
-            if (resp.data && resp.data.success) {
-              this.showToast(resp.data.message || '已停止', 'success');
-            } else {
-              this.showToast((resp.data && resp.data.message) || '停止失败', 'error');
-            }
-          } catch (e) {
-            this.showToast('停止失败: ' + e.message, 'error');
-          }
-        },
         getParentDirectory(path) {
           parentDir = path.substring(0, path.lastIndexOf('/'))
           if (parentDir == "")
@@ -2627,6 +2620,12 @@
             .then(response => {
               if (response.data.success) {
                 this.syncTaskStatus = response.data.data.task_status || {};
+                this.syncTasks.forEach(t => {
+                  var st = this.syncTaskStatus[t.task_id];
+                  if (st && (st.status === 'running' || st.status === 'stopping')) {
+                    t._expanded = false;
+                  }
+                });
                 for (var tid in this.syncRunning) {
                   if (!this.syncRunning[tid]) continue;
                   var st = this.syncTaskStatus[tid];
@@ -2694,12 +2693,13 @@
           const status = this.syncTaskStatus[taskId];
           if (!status) return 'idle';
           if (status.status === 'running' || this.syncRunning[taskId]) return 'running';
+          if (status.status === 'stopping') return 'running';
           if (status.status === 'STOPPED' || status.last_run_result === 'cancelled') return 'error';
           if (status.last_run_result === 'error') return 'error';
           return 'idle';
         },
         isSyncTaskRunning(taskId) {
-          return !!(this.syncRunning[taskId] || (this.syncTaskStatus[taskId] && this.syncTaskStatus[taskId].status === 'running'));
+          return !!(this.syncRunning[taskId] || (this.syncTaskStatus[taskId] && (this.syncTaskStatus[taskId].status === 'running' || this.syncTaskStatus[taskId].status === 'stopping')));
         },
         _resetSyncLogData(taskId, taskName) {
           const task = this.syncTasks.find(t => t.task_id === taskId);
@@ -3106,13 +3106,11 @@
           axios.post('/api/sync/cancel', { task_id: taskId, action: action })
             .then(response => {
               if (response.data.success) {
-                this.showToast(response.data.message, 'success');
+                this.showToast(response.data.message, 'warning');
                 var cancelled = (response.data.data && response.data.data.cancelled) ? response.data.data.cancelled : [];
                 cancelled.forEach(tid => {
                   if (!this.syncTaskStatus[tid]) this.$set(this.syncTaskStatus, tid, {});
-                  this.$set(this.syncTaskStatus[tid], 'status', 'STOPPED');
-                  this.$set(this.syncTaskStatus[tid], 'last_run_result', 'cancelled');
-                  this.$set(this.syncRunning, tid, false);
+                  this.$set(this.syncTaskStatus[tid], 'status', 'stopping');
                 });
                 this.fetchSyncTasks();
               } else {

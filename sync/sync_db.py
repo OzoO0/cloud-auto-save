@@ -245,6 +245,24 @@ class SyncDB:
             finally:
                 conn.close()
 
+    def update_task_status(self, task_id, status):
+        if not task_id or not status:
+            return
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute(
+                    """UPDATE sync_task_status
+                       SET status = ?
+                       WHERE task_id = ?""",
+                    (status, task_id),
+                )
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"更新任务 status 失败: {e}")
+            finally:
+                conn.close()
+
     def update_task_progress(self, task_id, synced, skipped, failed):
         """更新任务实时进度"""
         with self._lock:

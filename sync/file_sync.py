@@ -50,6 +50,7 @@ class FileSyncEngine:
         self.synced_files_tracker = synced_files_tracker
         self.structured_log = structured_log
         self._structured_sse_events = []
+        self._synced_rel_paths = []
         self._sse_persist_buffer = ""
         self._sse_persist_last_ts = 0.0
 
@@ -625,6 +626,18 @@ class FileSyncEngine:
         if not should_sync:
             self._skipped += 1
             logger.debug(f"  跳过: {rel_path} ({skip_reason})")
+            if skip_reason and skip_reason.startswith("快速指纹一致"):
+                self.db.add_sync_record(
+                    task_id=self.task_id,
+                    file_path=rel_path,
+                    file_name=fname,
+                    file_size=file_info.get("size"),
+                    file_mtime=file_info.get("mtime"),
+                    file_md5=file_info.get("md5"),
+                    dest_path=dest_path,
+                    status="skipped",
+                    message=skip_reason,
+                )
             return "skipped", skip_reason
 
         # 执行同步
@@ -722,6 +735,10 @@ class FileSyncEngine:
             raise
 
         self._synced += 1
+        try:
+            self._synced_rel_paths.append(file_info["rel_path"])
+        except Exception:
+            pass
 
         # 记录已同步的文件路径（用于取消时回滚）
         if self.synced_files_tracker is not None:
@@ -753,7 +770,6 @@ class FileSyncEngine:
             return
 
         try:
-            from notify import send
 
             title = f"[数据同步] {self.taskname}"
             status_text = {
@@ -771,6 +787,49 @@ class FileSyncEngine:
             if summary.get("message"):
                 body_lines.append(f"信息: {summary['message']}")
 
+            if summary.get("synced", 0) > 0 and self._synced_rel_paths:
+                def build_tree_lines(paths, limit=200):
+                    take = paths[:limit]
+                    tree = {}
+                    root_files = []
+                    for p in take:
+                        p = (p or "").replace("\\", "/").strip("/")
+                        if not p:
+                            continue
+                        parts = [x for x in p.split("/") if x]
+                        if len(parts) == 1:
+                            root_files.append(parts[0])
+                            continue
+                        cur = tree
+                        for d in parts[:-1]:
+                            cur = cur.setdefault(d, {})
+                        cur.setdefault("__files__", []).append(parts[-1])
+
+                    lines = []
+                    root_files_sorted = sorted(set(root_files))
+                    if root_files_sorted:
+                        lines.append("./")
+                        for fn in root_files_sorted:
+                            lines.append("  " + fn)
+
+                    def walk(node, depth):
+                        dirs = sorted([k for k in node.keys() if k != "__files__"])
+                        files = sorted(set(node.get("__files__", [])))
+                        for d in dirs:
+                            lines.append(("  " * depth) + d + "/")
+                            walk(node[d], depth + 1)
+                        for fn in files:
+                            lines.append(("  " * depth) + fn)
+
+                    walk(tree, 0)
+                    if len(paths) > limit:
+                        lines.append(f"...（共 {len(paths)} 个，仅展示前 {limit} 个）")
+                    return lines
+
+                body_lines.append("")
+                body_lines.append("新同步文件：")
+                body_lines.extend(build_tree_lines(self._synced_rel_paths, limit=200))
+
             body = "\n".join(body_lines)
 
             # 临时设置推送配置环境变量
@@ -782,7 +841,9 @@ class FileSyncEngine:
                     _os.environ[key] = value
 
             try:
-                send(title, body)
+                if summary['synced']>0 or summary['failed']>0:
+                    from quark_auto_save import send_ql_notify
+                    send_ql_notify(title, body)
             finally:
                 # 恢复环境变量
                 for key, old_val in old_env.items():

@@ -18,7 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sdk.cloudsaver import CloudSaver
 from sdk.pansou import PanSou
-from datetime import timedelta
+from datetime import datetime, timezone, timedelta
 import subprocess
 import requests
 import hashlib
@@ -188,12 +188,62 @@ app.json.sort_keys = False
 app.jinja_env.variable_start_string = "[["
 app.jinja_env.variable_end_string = "]]"
 
-scheduler = BackgroundScheduler()
+_BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def _beijing_time_converter(ts):
+    return datetime.fromtimestamp(ts, _BEIJING_TZ).timetuple()
+
+
+logging.Formatter.converter = staticmethod(_beijing_time_converter)
+
+
+class _APSchedulerBeijingTZFilter(logging.Filter):
+    def filter(self, record):
+        try:
+            args = record.args
+            if not args:
+                return True
+
+            if isinstance(args, tuple):
+                new_args = []
+                for a in args:
+                    if isinstance(a, datetime):
+                        dt = a
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        dt = dt.astimezone(_BEIJING_TZ)
+                        new_args.append(dt.strftime("%Y-%m-%d %H:%M:%S%z"))
+                        continue
+
+                    if hasattr(a, "id") and hasattr(a, "name") and hasattr(a, "next_run_time"):
+                        nr = getattr(a, "next_run_time", None)
+                        if isinstance(nr, datetime):
+                            dt = nr
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                            dt = dt.astimezone(_BEIJING_TZ)
+                            nr_s = dt.strftime("%Y-%m-%d %H:%M:%S%z")
+                        else:
+                            nr_s = str(nr)
+                        new_args.append(f'{a.name} (id={a.id}, next run at: {nr_s})')
+                        continue
+
+                    new_args.append(a)
+
+                record.args = tuple(new_args)
+        except Exception:
+            return True
+        return True
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
     format="[%(asctime)s][%(levelname)s] %(message)s",
     datefmt="%m-%d %H:%M:%S",
 )
+
+logging.getLogger("apscheduler.executors").addFilter(_APSchedulerBeijingTZFilter())
+logging.getLogger("apscheduler.executors.default").addFilter(_APSchedulerBeijingTZFilter())
+scheduler = BackgroundScheduler(timezone=_BEIJING_TZ)
 # 过滤werkzeug日志输出
 if not DEBUG:
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -1703,12 +1753,18 @@ def sync_cancel():
             cancelled.append(task_id)
 
     if cancelled:
+        try:
+            if sync_db:
+                for tid in cancelled:
+                    sync_db.update_task_status(tid, "stopping")
+        except Exception:
+            pass
         logging.info(f">>> 已发送取消信号: {cancelled}, action={action}")
         return jsonify({
             "success": True,
-            "code": "STOPPED",
-            "message": f"已取消 {len(cancelled)} 个任务",
-            "data": {"cancelled": cancelled, "status": "STOPPED"}
+            "code": "STOPPING",
+            "message": f"正在停止 {len(cancelled)} 个任务",
+            "data": {"cancelled": cancelled, "status": "stopping"}
         })
     else:
         return jsonify({"success": False, "code": "NOT_RUNNING", "message": "没有找到运行中的任务"})
