@@ -86,12 +86,3 @@ jobs:
           short-description: ${{ github.event.repository.description }}
           enable-url-completion: true
 
-      - name: Upload New Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          draft: false
-          prerelease: false
-          body: "## What's Changed\n\n${{ steps.get_commit_messages.outputs.commits }}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
