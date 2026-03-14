@@ -614,12 +614,18 @@
             </div>
 
             <!-- 同步任务卡片列表 -->
-            <div v-for="(task, index) in syncTasks" :key="'sync_'+index" class="task-card" :class="{'sync-task-running': syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'running')}">
+            <div v-for="(task, index) in syncTasks" :key="'sync_'+index" class="task-card" :class="{'sync-task-running': syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'running'), 'disabled': task.enabled === false}">
               <div class="task-card-header" @click="handleSyncCardClick(task, index)" style="cursor:pointer">
                 <div class="task-info">
                   <span class="collapse-arrow"><i class="bi" :class="task._expanded ? 'bi-caret-down-fill' : 'bi-caret-right-fill'"></i></span>
+                  
+                  <div class="custom-control custom-switch d-inline-block mr-2" @click.stop>
+                    <input type="checkbox" class="custom-control-input" :id="'enable_switch_'+index" v-model="task.enabled">
+                    <label class="custom-control-label" :for="'enable_switch_'+index"></label>
+                  </div>
+
                   <span class="sync-status-dot" :class="getSyncTaskStatusClass(task.task_id)"></span>
-                  <span class="task-name">{{ task.taskname || '未命名任务' }}</span>
+                  <span class="task-name" :class="{'text-muted': task.enabled === false}">{{ task.taskname || '未命名任务' }}</span>
                   <span class="sync-mode-badge" :class="task.sync_mode">{{ task.sync_mode === 'incremental' ? '增量' : '覆盖' }}</span>
                   <span v-if="!task.enabled" class="badge badge-secondary" style="font-size:0.65rem">已禁用</span>
                   <span class="sync-running-badge" v-if="syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].status === 'running')">
@@ -651,7 +657,7 @@
                   <div class="sync-running-progress"></div>
                 </div>
                 <div class="sync-running-info">
-                  <span class="sync-running-text"><i class="bi bi-hourglass-split spin"></i> 正在同步中...</span>
+                  <span class="sync-running-text"><i class="bi bi-hourglass-split spin"></i> 正在同步中... 同步 {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].files_synced) || 0 }} 跳过 {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].files_skipped) || 0 }} 失败 {{ (syncTaskStatus[task.task_id] && syncTaskStatus[task.task_id].files_failed) || 0 }}</span>
                   <button type="button" class="btn btn-link btn-sm sync-view-log-btn" @click.stop="runSyncTask_viewLog(task.task_id)">
                     <i class="bi bi-terminal"></i> 查看日志
                   </button>
@@ -833,6 +839,9 @@
             <h5 class="modal-title"><b>运行日志</b>
               <div v-if="modalLoading" class="spinner-border spinner-border-sm m-1" role="status"></div>
             </h5>
+            <div class="ml-auto mr-2 d-flex" style="gap:6px">
+              <button type="button" class="btn btn-outline-danger btn-sm" @click="stopSchedulerRun()">停止定时任务</button>
+            </div>
             <button type="button" class="close" data-dismiss="modal" aria-label="Close">
               <span aria-hidden="true">&times;</span>
             </button>
@@ -1215,7 +1224,6 @@
             <div class="sync-log-view-toggle" v-if="syncLogData.files.length > 0">
               <button class="btn btn-sm" :class="syncLogData.viewMode === 'list' ? 'btn-primary' : 'btn-outline-secondary'" @click="syncLogData.viewMode = 'list'" title="列表视图"><i class="bi bi-list-ul"></i></button>
               <button class="btn btn-sm" :class="syncLogData.viewMode === 'tree' ? 'btn-primary' : 'btn-outline-secondary'" @click="syncLogData.viewMode = 'tree'" title="树状视图"><i class="bi bi-diagram-3"></i></button>
-              <button class="btn btn-sm" :class="syncLogData.viewMode === 'raw' ? 'btn-primary' : 'btn-outline-secondary'" @click="syncLogData.viewMode = 'raw'" title="原始日志"><i class="bi bi-terminal"></i></button>
             </div>
             <button type="button" class="close" data-dismiss="modal" aria-label="Close">
               <span aria-hidden="true">&times;</span>
@@ -1284,10 +1292,9 @@
                 </div>
               </div>
             </div>
-
-            <!-- 原始日志视图 / 默认视图 -->
-            <div v-if="syncLogData.viewMode === 'raw' || syncLogData.files.length === 0" style="max-height: 400px; overflow-y: auto; padding: 12px;">
-              <pre class="run-log" v-html="syncRunLog"></pre>
+            <div v-else class="p-3 text-muted" style="max-height: 400px; overflow-y: auto;">
+              <div v-if="syncModalLoading">正在加载日志...</div>
+              <div v-else>暂无日志</div>
             </div>
           </div>
         </div>
@@ -1453,8 +1460,9 @@
         syncTasks: [],
         syncTaskStatus: {},
         syncRunning: {},
-        syncRunLog: "",
         syncModalLoading: false,
+        syncLogStreamController: null,
+        syncLogStreamTaskId: null,
         syncPollTimer: null,
         newSyncTask: {
           task_id: "",
@@ -1548,6 +1556,9 @@
           }
         });
         window.addEventListener('beforeunload', this.handleBeforeUnload);
+        $('#syncLogModal').on('hidden.bs.modal', () => {
+          this.stopSyncLogStream();
+        });
         // Re-init tooltips when tabs switch
         this.$watch('activeTab', () => {
           this.$nextTick(() => {
@@ -1558,6 +1569,7 @@
       beforeDestroy() {
         window.removeEventListener('beforeunload', this.handleBeforeUnload);
         this.stopSyncPoll();
+        this.stopSyncLogStream();
       },
       computed: {
         hasAnySyncRunning() {
@@ -2052,6 +2064,18 @@
           } catch (error) {
             this.modalLoading = false;
             console.error('Error:', error);
+          }
+        },
+        async stopSchedulerRun() {
+          try {
+            const resp = await axios.post('/api/scheduler/stop', {});
+            if (resp.data && resp.data.success) {
+              this.showToast(resp.data.message || '已停止', 'success');
+            } else {
+              this.showToast((resp.data && resp.data.message) || '停止失败', 'error');
+            }
+          } catch (e) {
+            this.showToast('停止失败: ' + e.message, 'error');
           }
         },
         getParentDirectory(path) {
@@ -2580,9 +2604,17 @@
                     t._expanded = expandedMap[t.task_id] !== undefined ? expandedMap[t.task_id] : t._expanded;
                   }
                   if (!t.file_type_filter) t.file_type_filter = [];
+                  if (t.enabled === undefined) this.$set(t, 'enabled', true);
                   return t;
                 });
                 this.syncTaskStatus = data.task_status || {};
+                for (var tid in this.syncRunning) {
+                  if (!this.syncRunning[tid]) continue;
+                  var st = this.syncTaskStatus[tid];
+                  if (!st || st.status !== 'running') {
+                    this.$set(this.syncRunning, tid, false);
+                  }
+                }
               }
             })
             .catch(error => {
@@ -2595,6 +2627,13 @@
             .then(response => {
               if (response.data.success) {
                 this.syncTaskStatus = response.data.data.task_status || {};
+                for (var tid in this.syncRunning) {
+                  if (!this.syncRunning[tid]) continue;
+                  var st = this.syncTaskStatus[tid];
+                  if (!st || st.status !== 'running') {
+                    this.$set(this.syncRunning, tid, false);
+                  }
+                }
               }
             })
             .catch(error => {
@@ -2655,11 +2694,131 @@
           const status = this.syncTaskStatus[taskId];
           if (!status) return 'idle';
           if (status.status === 'running' || this.syncRunning[taskId]) return 'running';
+          if (status.status === 'STOPPED' || status.last_run_result === 'cancelled') return 'error';
           if (status.last_run_result === 'error') return 'error';
           return 'idle';
         },
         isSyncTaskRunning(taskId) {
           return !!(this.syncRunning[taskId] || (this.syncTaskStatus[taskId] && this.syncTaskStatus[taskId].status === 'running'));
+        },
+        _resetSyncLogData(taskId, taskName) {
+          const task = this.syncTasks.find(t => t.task_id === taskId);
+          this.syncLogData.taskName = taskName || (task && task.taskname) || this.syncLogData.taskName || '同步任务';
+          this.syncLogData.files = [];
+          this.syncLogData.total = 0;
+          this.syncLogData.processed = 0;
+          this.syncLogData.synced = 0;
+          this.syncLogData.skipped = 0;
+          this.syncLogData.failed = 0;
+          this.syncLogData.elapsed = 0;
+          this.syncLogData.result = null;
+          this.syncLogData.viewMode = 'list';
+          this.syncLogData.treeExpanded = {};
+        },
+        stopSyncLogStream() {
+          if (this.syncLogStreamController) {
+            try { this.syncLogStreamController.abort(); } catch (e) {}
+          }
+          this.syncLogStreamController = null;
+          this.syncLogStreamTaskId = null;
+          this.syncModalLoading = false;
+        },
+        _parseSseBlock(block) {
+          var eventType = '';
+          var dataLines = [];
+          block.split('\n').forEach(line => {
+            if (line.startsWith('event:')) {
+              eventType = line.substring(6).trim();
+              return;
+            }
+            if (line.startsWith('data:')) {
+              dataLines.push(line.substring(5).trimStart());
+              return;
+            }
+          });
+          return { eventType: eventType, dataStr: dataLines.join('\n') };
+        },
+        _startSyncLogStream(taskId, url, fetchOptions, onStreamDone) {
+          this.stopSyncLogStream();
+          const controller = new AbortController();
+          this.syncLogStreamController = controller;
+          this.syncLogStreamTaskId = taskId;
+          this.syncModalLoading = true;
+
+          fetch(url, Object.assign({ method: 'GET' }, fetchOptions || {}, { signal: controller.signal }))
+            .then(response => {
+              if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream')) {
+                return response.json()
+                  .then(data => {
+                    this.showToast(data.message || '请求失败', 'error');
+                  })
+                  .catch(() => {
+                    this.showToast('请求失败', 'error');
+                  })
+                  .finally(() => {
+                    this.syncModalLoading = false;
+                    this.syncLogStreamController = null;
+                    this.syncLogStreamTaskId = null;
+                    if (onStreamDone) onStreamDone(false);
+                  });
+              }
+
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder();
+              var sseBuffer = '';
+
+              const readChunk = () => {
+                reader.read().then(({ value, done }) => {
+                  if (done) {
+                    this.syncModalLoading = false;
+                    this.syncLogStreamController = null;
+                    this.syncLogStreamTaskId = null;
+                    if (onStreamDone) onStreamDone(true);
+                    return;
+                  }
+
+                  sseBuffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+                  var parts = sseBuffer.split('\n\n');
+                  sseBuffer = parts.pop();
+
+                  parts.forEach(block => {
+                    if (!block.trim()) return;
+                    var parsed = this._parseSseBlock(block);
+                    if (!parsed.eventType) return;
+                    this._handleSseEvent(taskId, parsed.eventType, parsed.dataStr);
+                  });
+
+                  this.$nextTick(() => {
+                    var logEl = document.querySelector('#syncLogModal .sync-log-file-list');
+                    if (logEl) logEl.scrollTop = logEl.scrollHeight;
+                  });
+
+                  readChunk();
+                }).catch(error => {
+                  if (error && error.name === 'AbortError') return;
+                  this.syncModalLoading = false;
+                  this.syncLogStreamController = null;
+                  this.syncLogStreamTaskId = null;
+                  this.showToast('日志流异常: ' + (error.message || error), 'error');
+                  if (onStreamDone) onStreamDone(false);
+                });
+              };
+
+              readChunk();
+            })
+            .catch(error => {
+              if (error && error.name === 'AbortError') return;
+              this.syncModalLoading = false;
+              this.syncLogStreamController = null;
+              this.syncLogStreamTaskId = null;
+              this.showToast('请求失败: ' + error.message, 'error');
+              if (onStreamDone) onStreamDone(false);
+            });
+        },
+        openSyncLogModal(taskId) {
+          this._resetSyncLogData(taskId);
+          $('#syncLogModal').modal('show');
+          this._startSyncLogStream(taskId, '/api/sync/log/stream?task_id=' + encodeURIComponent(taskId));
         },
         runSyncTask(index) {
           const task = this.syncTasks[index];
@@ -2672,155 +2831,85 @@
           this.saveSyncTasks();
 
           this.$set(this.syncRunning, task.task_id, true);
-          this.syncRunLog = "";
-          this.syncModalLoading = true;
-          // 重置结构化日志数据
-          this.syncLogData.taskName = task.taskname || '同步任务';
-          this.syncLogData.files = [];
-          this.syncLogData.total = 0;
-          this.syncLogData.processed = 0;
-          this.syncLogData.synced = 0;
-          this.syncLogData.skipped = 0;
-          this.syncLogData.failed = 0;
-          this.syncLogData.elapsed = 0;
-          this.syncLogData.result = null;
-          this.syncLogData.viewMode = 'list';
-          this.syncLogData.treeExpanded = {};
+          this._resetSyncLogData(task.task_id, task.taskname || '同步任务');
           $('#syncLogModal').modal('show');
-
-          var sseBuffer = '';
-          fetch('/api/sync/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ task_id: task.task_id })
-          }).then(response => {
-            if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream')) {
-              return response.json().then(data => {
-                this.syncRunLog += (data.message || '请求失败') + '\n';
-                this.syncModalLoading = false;
-                this.$set(this.syncRunning, task.task_id, false);
-              });
+          this._startSyncLogStream(
+            task.task_id,
+            '/api/sync/run',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ task_id: task.task_id })
+            },
+            () => {
+              this.$set(this.syncRunning, task.task_id, false);
+              this.fetchSyncTasks();
             }
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            const readChunk = () => {
-              reader.read().then(({ value, done }) => {
-                if (done) {
-                  this.syncModalLoading = false;
-                  this.$set(this.syncRunning, task.task_id, false);
-                  this.fetchSyncTasks();
-                  return;
-                }
-                sseBuffer += decoder.decode(value, { stream: true });
-                // 按双换行分割完整的SSE事件块
-                var parts = sseBuffer.split('\n\n');
-                sseBuffer = parts.pop(); // 最后一段可能不完整，留在缓冲区
-                parts.forEach(block => {
-                  if (!block.trim()) return;
-                  var eventType = '';
-                  var dataStr = '';
-                  block.split('\n').forEach(line => {
-                    if (line.startsWith('event: ')) {
-                      eventType = line.substring(7).trim();
-                    } else if (line.startsWith('data: ')) {
-                      dataStr = line.substring(6);
-                    }
-                  });
-                  this._handleSseEvent(task.task_id, eventType, dataStr);
-                });
-                // 自动滚动日志
-                this.$nextTick(() => {
-                  var logEl = document.querySelector('#syncLogModal .sync-log-file-list');
-                  if (logEl) logEl.scrollTop = logEl.scrollHeight;
-                });
-                readChunk();
-              });
-            };
-            readChunk();
-          }).catch(error => {
-            this.syncModalLoading = false;
-            this.$set(this.syncRunning, task.task_id, false);
-            this.showToast('执行失败: ' + error.message, 'error');
-          });
+          );
         },
         _handleSseEvent(taskId, eventType, dataStr) {
-          // 终止信号
-          if (dataStr === '[DONE]' || dataStr === '[TIMEOUT]') {
-            this.syncModalLoading = false;
-            this.$set(this.syncRunning, taskId, false);
-            this.fetchSyncTasks();
+          if (!eventType) return;
+          var data = null;
+          try {
+            data = JSON.parse(dataStr);
+          } catch (e) {
             return;
           }
-          if (dataStr === '[CANCELLED]') {
-            this.syncModalLoading = false;
-            this.$set(this.syncRunning, taskId, false);
-            this.showToast('同步任务已取消', 'warning');
-            this.fetchSyncTasks();
-            return;
-          }
-          // 结构化事件
-          if (eventType) {
-            try {
-              var data = JSON.parse(dataStr);
-              switch (eventType) {
-                case 'init':
-                  this.syncLogData.total = data.total || 0;
-                  if (data.task_name) this.syncLogData.taskName = data.task_name;
-                  break;
-                case 'file_start':
-                  // 增量添加文件到列表
-                  if (data.index !== undefined && data.index >= this.syncLogData.files.length) {
-                    this.syncLogData.files.push({
-                      rel_path: data.rel_path || '',
-                      name: data.name || '',
-                      size: data.size || 0,
-                      status: 'syncing',
-                      message: '',
-                    });
-                  } else if (data.index !== undefined && data.index < this.syncLogData.files.length) {
-                    this.$set(this.syncLogData.files[data.index], 'status', 'syncing');
-                  }
-                  break;
-                case 'file_done':
-                  if (data.index !== undefined && data.index < this.syncLogData.files.length) {
-                    this.$set(this.syncLogData.files[data.index], 'status', data.status || 'success');
-                    this.$set(this.syncLogData.files[data.index], 'message', data.message || '');
-                  }
-                  break;
-                case 'progress':
-                  this.syncLogData.processed = data.processed || 0;
-                  this.syncLogData.synced = data.synced || 0;
-                  this.syncLogData.skipped = data.skipped || 0;
-                  this.syncLogData.failed = data.failed || 0;
-                  this.syncLogData.elapsed = data.elapsed || 0;
-                  break;
-                case 'done':
-                  this.syncLogData.result = data.result;
-                  this.syncLogData.synced = data.synced || 0;
-                  this.syncLogData.skipped = data.skipped || 0;
-                  this.syncLogData.failed = data.failed || 0;
-                  this.syncLogData.elapsed = data.elapsed || 0;
-                  break;
+          switch (eventType) {
+            case 'init':
+              this.syncLogData.total = data.total || 0;
+              if (data.task_name) this.syncLogData.taskName = data.task_name;
+              break;
+            case 'file_start':
+              if (data.index !== undefined && data.index >= this.syncLogData.files.length) {
+                this.syncLogData.files.push({
+                  rel_path: data.rel_path || '',
+                  name: data.name || '',
+                  size: data.size || 0,
+                  status: 'syncing',
+                  message: '',
+                });
+              } else if (data.index !== undefined && data.index < this.syncLogData.files.length) {
+                this.$set(this.syncLogData.files[data.index], 'status', 'syncing');
               }
-            } catch (e) {
-              // JSON解析失败，作为普通日志处理
-              this.syncRunLog += dataStr + '\n';
-            }
-            return;
-          }
-          // 普通日志行
-          if (dataStr) {
-            this.syncRunLog += dataStr + '\n';
+              break;
+            case 'file_done':
+              if (data.index !== undefined && data.index < this.syncLogData.files.length) {
+                this.$set(this.syncLogData.files[data.index], 'status', data.status || 'success');
+                this.$set(this.syncLogData.files[data.index], 'message', data.message || '');
+              }
+              break;
+            case 'progress':
+              this.syncLogData.processed = data.processed || 0;
+              this.syncLogData.synced = data.synced || 0;
+              this.syncLogData.skipped = data.skipped || 0;
+              this.syncLogData.failed = data.failed || 0;
+              this.syncLogData.elapsed = data.elapsed || 0;
+              break;
+            case 'done':
+              this.syncLogData.result = data.result;
+              this.syncLogData.synced = data.synced || 0;
+              this.syncLogData.skipped = data.skipped || 0;
+              this.syncLogData.failed = data.failed || 0;
+              this.syncLogData.elapsed = data.elapsed || 0;
+              break;
+            case 'task_execute':
+              if (data.task_name) this.syncLogData.taskName = data.task_name;
+              if (data.result) this.syncLogData.result = data.result;
+              if (data.synced !== undefined) this.syncLogData.synced = data.synced;
+              if (data.skipped !== undefined) this.syncLogData.skipped = data.skipped;
+              if (data.failed !== undefined) this.syncLogData.failed = data.failed;
+              break;
           }
         },
         // 查看正在运行的同步日志
         runSyncTask_viewLog(taskId) {
-          $('#syncLogModal').modal('show');
+          this.openSyncLogModal(taskId);
         },
         // 点击同步卡片头部：运行中任务打开日志，否则展开/折叠
         handleSyncCardClick(task, index) {
           if (!task._expanded && this.isSyncTaskRunning(task.task_id)) {
-            $('#syncLogModal').modal('show');
+            this.openSyncLogModal(task.task_id);
           } else {
             task._expanded = !task._expanded;
           }
@@ -3018,6 +3107,14 @@
             .then(response => {
               if (response.data.success) {
                 this.showToast(response.data.message, 'success');
+                var cancelled = (response.data.data && response.data.data.cancelled) ? response.data.data.cancelled : [];
+                cancelled.forEach(tid => {
+                  if (!this.syncTaskStatus[tid]) this.$set(this.syncTaskStatus, tid, {});
+                  this.$set(this.syncTaskStatus[tid], 'status', 'STOPPED');
+                  this.$set(this.syncTaskStatus[tid], 'last_run_result', 'cancelled');
+                  this.$set(this.syncRunning, tid, false);
+                });
+                this.fetchSyncTasks();
               } else {
                 this.showToast(response.data.message || '取消失败', 'error');
               }

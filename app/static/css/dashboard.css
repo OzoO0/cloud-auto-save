@@ -2771,8 +2771,17 @@ select:disabled {
   accent-color: var(--apple-blue);
 }
 
+.task-card.disabled {
+  opacity: 0.7;
+  background-color: var(--bg-tertiary);
+}
+
+.task-card.disabled .task-card-header {
+  opacity: 0.8;
+}
+
 /* =====================
-   30. Sync Responsive
+   40. Sync Responsive
    ===================== */
 @media (max-width: 768px) {
   .sync-form-row {

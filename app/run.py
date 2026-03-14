@@ -22,6 +22,7 @@ from datetime import timedelta
 import subprocess
 import requests
 import hashlib
+import secrets
 import logging
 import traceback
 import base64
@@ -138,9 +139,48 @@ _cancel_events = {}       # {task_id: threading.Event}
 _cancel_actions = {}      # {task_id: "keep"|"rollback"}
 _cancel_events_lock = threading.Lock()
 
+_run_procs_lock = threading.Lock()
+_run_procs = {}
+
 app = Flask(__name__)
 app.config["APP_VERSION"] = get_app_ver()
-app.secret_key = "ca943f6db6dd34823d36ab08d8d6f65d"
+
+
+def _get_or_create_flask_secret_key():
+    key = os.environ.get("FLASK_SECRET_KEY") or os.environ.get("SECRET_KEY")
+    if key:
+        return key
+
+    config_dir = os.path.dirname(os.path.realpath(CONFIG_PATH))
+    try:
+        os.makedirs(config_dir, exist_ok=True)
+    except OSError:
+        pass
+
+    key_path = os.path.join(config_dir, ".flask_secret_key")
+    try:
+        if os.path.exists(key_path):
+            with open(key_path, "r", encoding="utf-8") as f:
+                saved = f.read().strip()
+            if saved:
+                return saved
+    except OSError:
+        pass
+
+    key = secrets.token_hex(32)
+    try:
+        with open(key_path, "w", encoding="utf-8") as f:
+            f.write(key)
+        try:
+            os.chmod(key_path, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        pass
+    return key
+
+
+app.secret_key = _get_or_create_flask_secret_key()
 app.config["SESSION_COOKIE_NAME"] = "QUARK_AUTO_SAVE_SESSION"
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=31)
 app.json.ensure_ascii = False
@@ -157,6 +197,8 @@ logging.basicConfig(
 # 过滤werkzeug日志输出
 if not DEBUG:
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
+
     logging.getLogger("apscheduler").setLevel(logging.ERROR)
     sys.modules["flask.cli"].show_server_banner = lambda *x: None
 
@@ -428,6 +470,8 @@ def run_script_now():
     )
 
     def generate_output():
+        run_id = f"manual_{int(time.time() * 1000)}"
+
         # 设置环境变量
         process_env = os.environ.copy()
         process_env["PYTHONIOENCODING"] = "utf-8"
@@ -451,14 +495,39 @@ def run_script_now():
             bufsize=1,
             env=process_env,
         )
+        with _run_procs_lock:
+            _run_procs[run_id] = {"type": "script", "process": process}
         try:
             for line in iter(process.stdout.readline, ""):
-                logging.info(line.strip())
-                yield f"data: {line}\n\n"
-            yield "data: [DONE]\n\n"
+                s = line.rstrip("\n")
+                if s:
+                    logging.info(s)
+                try:
+                    yield f"data: {line}\n\n"
+                except GeneratorExit:
+                    break
+            try:
+                yield "data: [DONE]\n\n"
+            except GeneratorExit:
+                pass
         finally:
+            with _run_procs_lock:
+                _run_procs.pop(run_id, None)
             process.stdout.close()
-            process.wait()
+            try:
+                process.wait(timeout=2)
+            except Exception:
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+                try:
+                    process.wait(timeout=2)
+                except Exception:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
 
     return Response(
         stream_with_context(generate_output()),
@@ -1191,7 +1260,7 @@ def get_sync_tasks():
         return jsonify({"success": False, "message": "未登录"})
     try:
         sync_tasks = config_data.get("sync_tasks", [])
-        task_status = sync_db.get_all_task_status() if sync_db else {}
+        task_status = sync_db.get_all_task_status(include_data=False) if sync_db else {}
         return jsonify({
             "success": True,
             "data": {
@@ -1210,7 +1279,7 @@ def get_sync_status():
     if not is_login():
         return jsonify({"success": False, "message": "未登录"})
     try:
-        task_status = sync_db.get_all_task_status() if sync_db else {}
+        task_status = sync_db.get_all_task_status(include_data=False) if sync_db else {}
         return jsonify({"success": True, "data": {"task_status": task_status}})
     except Exception as e:
         logging.error(f">>> 获取同步状态失败: {e}")
@@ -1256,13 +1325,27 @@ def sync_run():
     if not task_config:
         return jsonify({"success": False, "message": f"未找到任务: {task_id}"})
 
-    log_queue = queue.Queue()
-    cancel_event = threading.Event()
-    synced_files_tracker = []
+    task_config = dict(task_config)
+    task_config["_trigger"] = "manual"
 
-    # 注册取消信号
+    log_queue = queue.Queue()
+    synced_files_tracker = []
+    registered = False
+
     with _cancel_events_lock:
-        _cancel_events[task_id] = cancel_event
+        status = None
+        try:
+            status = sync_db.get_task_status(task_id, include_data=False) if sync_db else None
+        except Exception:
+            status = None
+        running = bool(status and status.get("status") == "running")
+        existing = _cancel_events.get(task_id)
+        if existing and running:
+            cancel_event = existing
+        else:
+            cancel_event = threading.Event()
+            _cancel_events[task_id] = cancel_event
+            registered = True
 
     def log_callback(msg):
         log_queue.put(msg)
@@ -1300,9 +1383,10 @@ def sync_run():
                     except Exception:
                         pass
 
-            # 清理取消信号
-            with _cancel_events_lock:
-                _cancel_events.pop(task_id, None)
+            if registered:
+                with _cancel_events_lock:
+                    if _cancel_events.get(task_id) == cancel_event:
+                        _cancel_events.pop(task_id, None)
 
             if cancelled:
                 log_queue.put("[CANCELLED]")
@@ -1313,29 +1397,36 @@ def sync_run():
     thread.start()
 
     def generate_output():
-        while True:
-            try:
-                msg = log_queue.get(timeout=TASK_TIMEOUT)
-                if msg == "[DONE]":
-                    yield "data: [DONE]\n\n"
+        try:
+            while True:
+                try:
+                    msg = log_queue.get(timeout=TASK_TIMEOUT)
+                    if msg == "[DONE]":
+                        yield "data: [DONE]\n\n"
+                        break
+                    elif msg == "[CANCELLED]":
+                        yield "data: [CANCELLED]\n\n"
+                        break
+                    if msg.startswith("{"):
+                        try:
+                            evt = json.loads(msg)
+                            event_type = evt.get("event", "log")
+                            data_str = json.dumps(evt.get("data", {}), ensure_ascii=False)
+                            yield f"event: {event_type}\ndata: {data_str}\n\n"
+                            continue
+                        except (json.JSONDecodeError, AttributeError):
+                            pass
+                    yield f"data: {msg}\n\n"
+                except Exception:
+                    yield "data: [TIMEOUT]\n\n"
                     break
-                elif msg == "[CANCELLED]":
-                    yield "data: [CANCELLED]\n\n"
-                    break
-                # 检查是否是结构化事件 JSON
-                if msg.startswith("{"):
-                    try:
-                        evt = json.loads(msg)
-                        event_type = evt.get("event", "log")
-                        data_str = json.dumps(evt.get("data", {}), ensure_ascii=False)
-                        yield f"event: {event_type}\ndata: {data_str}\n\n"
-                        continue
-                    except (json.JSONDecodeError, AttributeError):
-                        pass
-                yield f"data: {msg}\n\n"
-            except Exception:
-                yield "data: [TIMEOUT]\n\n"
-                break
+        except GeneratorExit:
+            pass
+        finally:
+            if registered:
+                with _cancel_events_lock:
+                    if _cancel_events.get(task_id) == cancel_event:
+                        _cancel_events.pop(task_id, None)
 
     return Response(
         stream_with_context(generate_output()),
@@ -1345,6 +1436,88 @@ def sync_run():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.route("/api/sync/logs", methods=["GET"])
+def get_sync_logs():
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    return jsonify({
+        "success": False,
+        "code": "DEPRECATED",
+        "message": "已弃用，请使用 /api/sync/log/stream (SSE) 获取结构化日志",
+    })
+
+
+@app.route("/api/sync/log/stream", methods=["GET"])
+def stream_sync_log():
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据同步模块未初始化"})
+
+    task_id = request.args.get("task_id", "")
+    if not task_id:
+        return jsonify({"success": False, "message": "缺少 task_id 参数"})
+
+    def generate_output():
+        offset = 0
+        terminal_seen = False
+        first = True
+        while True:
+            status = None
+            try:
+                status = sync_db.get_task_status(task_id, include_data=True)
+            except Exception as e:
+                logging.error(f">>> 获取同步日志流失败: {e}")
+                status = None
+
+            data = (status or {}).get("data") or ""
+            running = bool(status and status.get("status") == "running")
+
+            if first:
+                if data:
+                    if data.endswith("\n\n"):
+                        yield data
+                    else:
+                        yield data + "\n\n"
+                offset = len(data)
+                first = False
+            else:
+                if len(data) < offset:
+                    if data:
+                        if data.endswith("\n\n"):
+                            yield data
+                        else:
+                            yield data + "\n\n"
+                    offset = len(data)
+                elif len(data) > offset:
+                    yield data[offset:]
+                    offset = len(data)
+
+            if "event: task_execute" in data or "event: done" in data:
+                terminal_seen = True
+
+            if (not running) and terminal_seen:
+                break
+
+            time.sleep(0.25)
+
+        yield "data: [DONE]\n\n"
+
+    return Response(
+        stream_with_context(generate_output()),
+        content_type="text/event-stream;charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.route("/api/sync/replay", methods=["GET"])
+def replay_sync_events():
+    return stream_sync_log()
 
 
 @app.route("/api/sync/records", methods=["GET"])
@@ -1533,11 +1706,12 @@ def sync_cancel():
         logging.info(f">>> 已发送取消信号: {cancelled}, action={action}")
         return jsonify({
             "success": True,
+            "code": "STOPPED",
             "message": f"已取消 {len(cancelled)} 个任务",
-            "data": {"cancelled": cancelled}
+            "data": {"cancelled": cancelled, "status": "STOPPED"}
         })
     else:
-        return jsonify({"success": False, "message": "没有找到运行中的任务"})
+        return jsonify({"success": False, "code": "NOT_RUNNING", "message": "没有找到运行中的任务"})
 
 
 @app.route("/api/sync/records/batch-delete", methods=["POST"])
@@ -1572,38 +1746,67 @@ def batch_delete_sync_records():
         return jsonify({"success": False, "message": str(e)})
 
 
-# 定时任务执行的函数
-def run_python(args):
+def run_python(script_path, config_path):
     logging.info(f">>> 定时运行任务")
+
+    process_env = os.environ.copy()
+    process_env["PYTHONIOENCODING"] = "utf-8"
+    command = [PYTHON_PATH, "-u", script_path, config_path]
+    process = None
     try:
-        result = subprocess.run(
-            f"{PYTHON_PATH} {args}",
-            shell=True,
-            timeout=TASK_TIMEOUT,
-            capture_output=True,
-            text=True,
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
             encoding="utf-8",
             errors="replace",
+            bufsize=1,
+            env=process_env,
         )
-        # 输出执行日志
-        if result.stdout:
-            for line in result.stdout.strip().split("\n"):
-                if line.strip():
-                    logging.info(line)
-
-        if result.returncode == 0:
+        with _run_procs_lock:
+            _run_procs["__scheduler__"] = {"type": "scheduler", "process": process}
+        start = time.time()
+        for line in iter(process.stdout.readline, ""):
+            s = line.rstrip("\n")
+            if s:
+                logging.info(s)
+            if time.time() - start > TASK_TIMEOUT:
+                break
+        try:
+            process.wait(timeout=2)
+        except Exception:
+            pass
+        if process.poll() is None:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=5)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+        code = process.returncode if process else -1
+        if code == 0:
             logging.info(f">>> 任务执行成功")
         else:
-            logging.error(f">>> 任务执行失败，返回码: {result.returncode}")
-            if result.stderr:
-                logging.error(f"错误信息: {result.stderr[:500]}")
-    except subprocess.TimeoutExpired as e:
-        logging.error(f">>> 任务执行超时(>{TASK_TIMEOUT}s)，强制终止")
+            logging.error(f">>> 任务执行失败，返回码: {code}")
     except Exception as e:
         logging.error(f">>> 任务执行异常: {str(e)}")
         logging.error(traceback.format_exc())
     finally:
-        # 确保函数能够正常返回
+        with _run_procs_lock:
+            v = _run_procs.get("__scheduler__")
+            if v and v.get("process") == process:
+                _run_procs.pop("__scheduler__", None)
+        if process and process.stdout:
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
         logging.debug(f">>> run_python 函数执行完成")
 
 
@@ -1621,7 +1824,7 @@ def reload_tasks():
         scheduler.add_job(
             run_python,
             trigger=trigger,
-            args=[f"{SCRIPT_PATH} {CONFIG_PATH}"],
+            args=[SCRIPT_PATH, CONFIG_PATH],
             id=SCRIPT_PATH,
             max_instances=1,  # 最多允许1个实例运行
             coalesce=True,  # 合并错过的任务，避免堆积
@@ -1641,6 +1844,26 @@ def reload_tasks():
     else:
         logging.info(">>> no crontab")
         return False
+
+
+@app.route("/api/scheduler/stop", methods=["POST"])
+def stop_scheduler_run():
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    with _run_procs_lock:
+        info = _run_procs.get("__scheduler__")
+        proc = info.get("process") if info else None
+    if not proc:
+        return jsonify({"success": False, "message": "没有找到运行中的任务"})
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+        return jsonify({"success": True, "message": "已发送停止信号"})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
 
 
 def init():
@@ -1718,6 +1941,8 @@ def init():
             db=sync_db,
             base_dir=datafiles_abs,
             config_getter=lambda: config_data,
+            cancel_events=_cancel_events,
+            cancel_events_lock=_cancel_events_lock,
         )
         logging.info(f">>> 数据同步模块已初始化 (datafiles={datafiles_abs})")
     except Exception as e:

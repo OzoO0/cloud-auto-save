@@ -80,6 +80,7 @@ class SyncDB:
                         lock_time REAL
                     );
                 """)
+                self._ensure_task_status_columns(conn)
                 conn.commit()
                 logger.info(f"同步数据库已初始化: {self.db_path}")
             except Exception as e:
@@ -87,6 +88,21 @@ class SyncDB:
                 raise
             finally:
                 conn.close()
+
+    def _ensure_task_status_columns(self, conn):
+        cols = set()
+        for row in conn.execute("PRAGMA table_info(sync_task_status)").fetchall():
+            cols.add(row[1])
+        required = {
+            "last_run_start": "REAL",
+            "last_run_end": "REAL",
+            "last_run_trigger": "TEXT",
+            "last_run_error": "TEXT",
+            "data": "TEXT",
+        }
+        for name, typ in required.items():
+            if name not in cols:
+                conn.execute(f"ALTER TABLE sync_task_status ADD COLUMN {name} {typ}")
 
     # ========== 任务锁管理 ==========
 
@@ -181,6 +197,33 @@ class SyncDB:
 
     # ========== 任务状态管理 ==========
 
+    def append_task_sse_data(self, task_id, sse_chunk):
+        if not task_id or not sse_chunk:
+            return
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "INSERT OR IGNORE INTO sync_task_status (task_id) VALUES (?)",
+                    (task_id,),
+                )
+                conn.execute(
+                    """UPDATE sync_task_status
+                       SET data = COALESCE(data, '') || ?
+                       WHERE task_id = ?""",
+                    (sse_chunk, task_id),
+                )
+                conn.commit()
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                logger.warning(f"追加任务 SSE 数据失败: {e}")
+            finally:
+                conn.close()
+
     def update_task_result(self, task_id, result, synced=0, skipped=0, failed=0):
         """更新任务执行结果"""
         with self._lock:
@@ -202,23 +245,122 @@ class SyncDB:
             finally:
                 conn.close()
 
-    def get_task_status(self, task_id):
+    def update_task_progress(self, task_id, synced, skipped, failed):
+        """更新任务实时进度"""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute(
+                    """UPDATE sync_task_status
+                       SET files_synced = ?,
+                           files_skipped = ?,
+                           files_failed = ?
+                       WHERE task_id = ?""",
+                    (synced, skipped, failed, task_id),
+                )
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"更新任务进度失败: {e}")
+            finally:
+                conn.close()
+
+    def update_task_start(self, task_id, start_ts, trigger):
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    """UPDATE sync_task_status
+                       SET last_run_start = ?,
+                           last_run_trigger = ?,
+                           last_run_error = NULL,
+                           data = NULL
+                       WHERE task_id = ?""",
+                    (start_ts, trigger, task_id),
+                )
+                conn.commit()
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                logger.warning(f"更新任务开始信息失败: {e}")
+            finally:
+                conn.close()
+
+    def update_task_snapshot(self, task_id, snapshot, sse_record, error_summary=None):
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    """UPDATE sync_task_status
+                       SET last_run_time = ?,
+                           last_run_end = ?,
+                           last_run_result = ?,
+                           files_synced = ?,
+                           files_skipped = ?,
+                           files_failed = ?,
+                           last_run_error = ?,
+                           data = ?
+                       WHERE task_id = ?""",
+                    (
+                        snapshot.get("ended_at"),
+                        snapshot.get("ended_at"),
+                        snapshot.get("result"),
+                        snapshot.get("synced", 0),
+                        snapshot.get("skipped", 0),
+                        snapshot.get("failed", 0),
+                        error_summary,
+                        sse_record,
+                        task_id,
+                    ),
+                )
+                conn.commit()
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                logger.warning(f"更新任务快照失败: {e}")
+            finally:
+                conn.close()
+
+    def get_task_status(self, task_id, include_data=False):
         """获取指定任务状态"""
         conn = self._get_conn()
         try:
-            row = conn.execute(
-                "SELECT * FROM sync_task_status WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
+            if include_data:
+                row = conn.execute(
+                    "SELECT * FROM sync_task_status WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT task_id, status, last_run_time, last_run_result,
+                              files_synced, files_skipped, files_failed, lock_time,
+                              last_run_start, last_run_end, last_run_trigger, last_run_error
+                       FROM sync_task_status
+                       WHERE task_id = ?""",
+                    (task_id,),
+                ).fetchone()
             return dict(row) if row else None
         finally:
             conn.close()
 
-    def get_all_task_status(self):
+    def get_all_task_status(self, include_data=False):
         """获取所有任务状态，返回 {task_id: status_dict}"""
         conn = self._get_conn()
         try:
-            rows = conn.execute("SELECT * FROM sync_task_status").fetchall()
+            if include_data:
+                rows = conn.execute("SELECT * FROM sync_task_status").fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT task_id, status, last_run_time, last_run_result,
+                              files_synced, files_skipped, files_failed, lock_time,
+                              last_run_start, last_run_end, last_run_trigger, last_run_error
+                       FROM sync_task_status"""
+                ).fetchall()
             return {row["task_id"]: dict(row) for row in rows}
         finally:
             conn.close()

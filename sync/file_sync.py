@@ -45,9 +45,13 @@ class FileSyncEngine:
         self.push_config = push_config or {}
         self.task_id = task_config.get("task_id", "")
         self.taskname = task_config.get("taskname", "未命名任务")
+        self.trigger = task_config.get("_trigger", "manual")
         self.cancel_event = cancel_event
         self.synced_files_tracker = synced_files_tracker
         self.structured_log = structured_log
+        self._structured_sse_events = []
+        self._sse_persist_buffer = ""
+        self._sse_persist_last_ts = 0.0
 
         # 解析目录路径
         source_rel = task_config.get("source_dir", "")
@@ -85,8 +89,33 @@ class FileSyncEngine:
 
     def _emit(self, event_type, data, callback=None):
         """发送结构化事件（仅 structured_log 模式）"""
-        if callback and self.structured_log:
-            callback(json.dumps({"event": event_type, "data": data}, ensure_ascii=False))
+        if self.structured_log:
+            if callback:
+                callback(json.dumps({"event": event_type, "data": data}, ensure_ascii=False))
+            sse_block = (
+                "event: " + str(event_type) + "\n"
+                + "data: " + json.dumps(data, ensure_ascii=False) + "\n\n"
+            )
+            self._structured_sse_events.append(sse_block)
+            self._sse_persist_buffer += sse_block
+            if event_type in ("init", "file_start"):
+                self._persist_sse_buffer(force=True)
+            else:
+                self._persist_sse_buffer()
+
+    def _persist_sse_buffer(self, force=False):
+        if not self.structured_log or not self._sse_persist_buffer:
+            return
+        now = time.time()
+        if not force:
+            if (now - self._sse_persist_last_ts) < 0.25 and len(self._sse_persist_buffer) < 8192:
+                return
+        try:
+            self.db.append_task_sse_data(self.task_id, self._sse_persist_buffer)
+            self._sse_persist_buffer = ""
+            self._sse_persist_last_ts = now
+        except Exception:
+            pass
 
     def _is_cancelled(self):
         """检查任务是否已被取消"""
@@ -110,31 +139,92 @@ class FileSyncEngine:
         self._failed = 0
         start_time = time.time()
 
-        self._log(f"[数据同步] 开始执行: {self.taskname}", log_callback)
-        self._log(f"  源目录: {self.source_dir}", log_callback)
-        self._log(f"  目标目录: {self.dest_dir}", log_callback)
-        self._log(f"  同步模式: {self.sync_mode} | 匹配模式: {self.match_mode}", log_callback)
-
-        # 路径安全校验
-        try:
-            self._validate_path(self.source_dir)
-            self._validate_path(self.dest_dir)
-        except ValueError as e:
-            self._log(f"  错误: {e}", log_callback)
-            return self._build_summary("error", str(e), time.time() - start_time)
-
-        # 获取任务锁
         if not self.db.acquire_lock(self.task_id):
             msg = "任务正在运行中，跳过本次执行"
             self._log(f"  {msg}", log_callback)
             return self._build_summary("skipped", msg, time.time() - start_time)
 
         try:
+            try:
+                self.db.update_task_start(self.task_id, start_time, self.trigger)
+            except Exception:
+                pass
+
+            def finalize(result, message, error_summary=None):
+                elapsed = time.time() - start_time
+                summary = self._build_summary(result, message, elapsed)
+
+                try:
+                    self._emit("done", {
+                        "result": result,
+                        "synced": self._synced,
+                        "skipped": self._skipped,
+                        "failed": self._failed,
+                        "elapsed": round(elapsed, 1),
+                    }, log_callback)
+                except Exception:
+                    pass
+
+                ended_at = time.time()
+                snapshot = {
+                    "task_id": self.task_id,
+                    "task_name": self.taskname,
+                    "trigger": self.trigger,
+                    "started_at": start_time,
+                    "ended_at": ended_at,
+                    "result": result,
+                    "synced": self._synced,
+                    "skipped": self._skipped,
+                    "failed": self._failed,
+                    "error": error_summary or "",
+                }
+
+                task_execute_event = (
+                    "event: task_execute\ndata: "
+                    + json.dumps(snapshot, ensure_ascii=False)
+                    + "\n\n"
+                )
+
+                if self.structured_log:
+                    self._structured_sse_events.append(task_execute_event)
+                    self._sse_persist_buffer += task_execute_event
+                    self._persist_sse_buffer(force=True)
+
+                if self._structured_sse_events:
+                    sse_record = "".join(self._structured_sse_events)
+                else:
+                    sse_record = task_execute_event
+
+                try:
+                    self.db.update_task_snapshot(self.task_id, snapshot, sse_record, error_summary)
+                except Exception:
+                    pass
+
+                if result != "cancelled":
+                    if result == "success" and self.notify_on_complete:
+                        self._send_notification(summary)
+                    elif result in ("error", "partial") and self.notify_on_error:
+                        self._send_notification(summary)
+
+                return summary
+
+            self._log(f"[数据同步] 开始执行: {self.taskname}", log_callback)
+            self._log(f"  源目录: {self.source_dir}", log_callback)
+            self._log(f"  目标目录: {self.dest_dir}", log_callback)
+            self._log(f"  同步模式: {self.sync_mode} | 匹配模式: {self.match_mode}", log_callback)
+
+            try:
+                self._validate_path(self.source_dir)
+                self._validate_path(self.dest_dir)
+            except ValueError as e:
+                self._log(f"  错误: {e}", log_callback)
+                return finalize("error", str(e), str(e))
+
             # 检查源目录
             if not os.path.isdir(self.source_dir):
                 msg = f"源目录不存在: {self.source_dir}"
                 self._log(f"  错误: {msg}", log_callback)
-                return self._build_summary("error", msg, time.time() - start_time)
+                return finalize("error", msg, msg)
 
             # 确保目标目录存在
             os.makedirs(self.dest_dir, exist_ok=True)
@@ -142,7 +232,7 @@ class FileSyncEngine:
             # 检查取消
             if self._is_cancelled():
                 self._log("  任务已被用户取消", log_callback)
-                return self._build_summary("cancelled", "用户取消", time.time() - start_time)
+                return finalize("cancelled", "用户取消", "用户取消")
 
             # 扫描文件
             files = self._scan_source_dir(log_callback)
@@ -151,7 +241,7 @@ class FileSyncEngine:
             if not files:
                 msg = "没有需要同步的文件"
                 self._log(f"  {msg}", log_callback)
-                return self._build_summary("success", msg, time.time() - start_time)
+                return finalize("success", msg, None)
 
             # 发送 init 结构化事件
             self._emit("init", {
@@ -223,6 +313,11 @@ class FileSyncEngine:
                     "elapsed": round(elapsed_now, 1),
                 }, log_callback)
 
+                if processed % 5 == 0 or idx == len(files) - 1:
+                    self.db.update_task_progress(
+                        self.task_id, self._synced, self._skipped, self._failed
+                    )
+
             elapsed = time.time() - start_time
 
             if cancelled:
@@ -238,37 +333,66 @@ class FileSyncEngine:
                     log_callback,
                 )
 
-            summary = self._build_summary(result, "", elapsed)
+            return finalize(result, "", None)
 
-            # 发送 done 结构化事件
-            self._emit("done", {
-                "result": result,
+        except Exception as e:
+            self._log(f"  任务异常: {e}", log_callback)
+            elapsed = time.time() - start_time
+            summary = self._build_summary("error", str(e), elapsed)
+            try:
+                self._emit("done", {
+                    "result": "error",
+                    "synced": self._synced,
+                    "skipped": self._skipped,
+                    "failed": self._failed,
+                    "elapsed": round(elapsed, 1),
+                }, log_callback)
+            except Exception:
+                pass
+
+            ended_at = time.time()
+            snapshot = {
+                "task_id": self.task_id,
+                "task_name": self.taskname,
+                "trigger": self.trigger,
+                "started_at": start_time,
+                "ended_at": ended_at,
+                "result": "error",
                 "synced": self._synced,
                 "skipped": self._skipped,
                 "failed": self._failed,
-                "elapsed": round(elapsed, 1),
-            }, log_callback)
+                "error": str(e),
+            }
 
-            # 更新任务状态
-            self.db.update_task_result(
-                self.task_id, result, self._synced, self._skipped, self._failed
+            task_execute_event = (
+                "event: task_execute\ndata: "
+                + json.dumps(snapshot, ensure_ascii=False)
+                + "\n\n"
             )
 
-            # 发送通知（取消时不通知）
-            if not cancelled:
-                self._send_notification(summary)
+            if self.structured_log:
+                self._structured_sse_events.append(task_execute_event)
+                self._sse_persist_buffer += task_execute_event
+                self._persist_sse_buffer(force=True)
 
-            return summary
+            if self._structured_sse_events:
+                sse_record = "".join(self._structured_sse_events)
+            else:
+                sse_record = task_execute_event
 
-        except Exception as e:
-            elapsed = time.time() - start_time
-            self._log(f"  任务异常: {e}", log_callback)
-            self.db.update_task_result(self.task_id, "error", self._synced, self._skipped, self._failed)
-            summary = self._build_summary("error", str(e), elapsed)
+            try:
+                self.db.update_task_snapshot(self.task_id, snapshot, sse_record, str(e))
+            except Exception:
+                pass
+
             if self.notify_on_error:
                 self._send_notification(summary)
             return summary
         finally:
+            try:
+                self._persist_sse_buffer(force=True)
+            except Exception:
+                pass
             self.db.release_lock(self.task_id)
 
     # ========== 文件扫描 ==========

@@ -15,18 +15,22 @@ class SyncSchedulerManager:
 
     JOB_PREFIX = "sync_"
 
-    def __init__(self, scheduler, db, base_dir, config_getter):
+    def __init__(self, scheduler, db, base_dir, config_getter, cancel_events=None, cancel_events_lock=None):
         """
         Args:
             scheduler: APScheduler BackgroundScheduler 实例
             db: SyncDB 实例
             base_dir: datafiles 基础目录的绝对路径
             config_getter: 获取当前配置的回调函数 (返回 config_data dict)
+            cancel_events: 取消事件字典 {task_id: threading.Event}
+            cancel_events_lock: 取消事件字典的锁
         """
         self.scheduler = scheduler
         self.db = db
         self.base_dir = base_dir
         self.config_getter = config_getter
+        self.cancel_events = cancel_events if cancel_events is not None else {}
+        self.cancel_events_lock = cancel_events_lock
 
     def reload_sync_tasks(self, sync_tasks):
         """
@@ -79,23 +83,60 @@ class SyncSchedulerManager:
 
     def _execute_sync_task(self, task_config):
         """定时触发的任务执行入口"""
+        task_config = dict(task_config or {})
+        task_config["_trigger"] = "scheduler"
         taskname = task_config.get("taskname", "")
+        task_id = task_config.get("task_id", "")
         logger.info(f"[定时] 开始执行同步任务: {taskname}")
 
-        push_config = self._get_push_config()
-        engine = FileSyncEngine(
-            task_config=task_config,
-            db=self.db,
-            base_dir=self.base_dir,
-            push_config=push_config,
-        )
-        summary = engine.execute()
-        logger.info(
-            f"[定时] 同步任务完成: {taskname} "
-            f"结果={summary['result']} 同步={summary['synced']} "
-            f"跳过={summary['skipped']} 失败={summary['failed']}"
-        )
-        return summary
+        cancel_event = threading.Event()
+        registered = False
+        if task_id:
+            status = None
+            try:
+                status = self.db.get_task_status(task_id, include_data=False)
+            except Exception:
+                status = None
+            running = bool(status and status.get("status") == "running")
+            if self.cancel_events_lock:
+                with self.cancel_events_lock:
+                    existing = self.cancel_events.get(task_id)
+                    if existing and running:
+                        cancel_event = existing
+                    else:
+                        self.cancel_events[task_id] = cancel_event
+                        registered = True
+            else:
+                existing = self.cancel_events.get(task_id)
+                if existing and running:
+                    cancel_event = existing
+                else:
+                    self.cancel_events[task_id] = cancel_event
+                    registered = True
+
+        try:
+            summary = self.run_task_now(
+                task_config=task_config,
+                log_callback=None,
+                cancel_event=cancel_event,
+                synced_files_tracker=None,
+                structured_log=True,
+            )
+            logger.info(
+                f"[定时] 同步任务完成: {taskname} "
+                f"结果={summary['result']} 同步={summary['synced']} "
+                f"跳过={summary['skipped']} 失败={summary['failed']}"
+            )
+            return summary
+        finally:
+            if task_id and registered:
+                if self.cancel_events_lock:
+                    with self.cancel_events_lock:
+                        if self.cancel_events.get(task_id) == cancel_event:
+                            self.cancel_events.pop(task_id, None)
+                else:
+                    if self.cancel_events.get(task_id) == cancel_event:
+                        self.cancel_events.pop(task_id, None)
 
     def run_task_now(self, task_config, log_callback=None,
                      cancel_event=None, synced_files_tracker=None, structured_log=False):
