@@ -3,7 +3,9 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
     <title>登录 - 网盘自动转存</title>
     <link rel="stylesheet" href="./static/css/bootstrap.min.css">
     <link rel="stylesheet" href="./static/css/bootstrap-icons.min.css">
@@ -13,6 +15,26 @@
             --apple-blue: #007AFF;
             --apple-blue-hover: #0066d6;
             --font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', sans-serif;
+            --safe-area-top: 0px;
+            --safe-area-right: 0px;
+            --safe-area-bottom: 0px;
+            --safe-area-left: 0px;
+        }
+        @supports (padding: env(safe-area-inset-top)) {
+            :root {
+                --safe-area-top: env(safe-area-inset-top);
+                --safe-area-right: env(safe-area-inset-right);
+                --safe-area-bottom: env(safe-area-inset-bottom);
+                --safe-area-left: env(safe-area-inset-left);
+            }
+        }
+        @supports (padding: constant(safe-area-inset-top)) {
+            :root {
+                --safe-area-top: constant(safe-area-inset-top);
+                --safe-area-right: constant(safe-area-inset-right);
+                --safe-area-bottom: constant(safe-area-inset-bottom);
+                --safe-area-left: constant(safe-area-inset-left);
+            }
         }
         * {
             box-sizing: border-box;
@@ -26,7 +48,9 @@
             align-items: center;
             justify-content: center;
             margin: 0;
-            padding: 16px;
+            padding: calc(16px + var(--safe-area-top)) calc(16px + var(--safe-area-right)) calc(16px + var(--safe-area-bottom)) calc(16px + var(--safe-area-left));
+            -webkit-text-size-adjust: 100%;
+            text-size-adjust: 100%;
         }
         .login-wrapper {
             width: 100%;
@@ -52,8 +76,10 @@
             border: 1px solid rgba(0,0,0,0.06);
             transition: box-shadow 0.3s ease, transform 0.3s ease;
         }
-        .login-card:hover {
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1), 0 2px 8px rgba(0,0,0,0.06);
+        @media (hover: hover) and (pointer: fine) {
+            .login-card:hover {
+                box-shadow: 0 8px 32px rgba(0,0,0,0.1), 0 2px 8px rgba(0,0,0,0.06);
+            }
         }
         .login-header {
             padding: 2rem 2rem 0.5rem;
@@ -85,9 +111,10 @@
             border: 1.5px solid rgba(0,0,0,0.08);
             background: #f2f2f7;
             padding: 10px 14px;
-            font-size: 0.875rem;
+            font-size: 1rem;
             transition: all 0.2s ease;
             -webkit-appearance: none;
+            min-height: 44px;
         }
         .form-control:focus {
             border-color: var(--apple-blue);
@@ -126,16 +153,21 @@
             transition: all 0.2s ease;
             position: relative;
             overflow: hidden;
+            min-height: 44px;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
         }
         .btn-primary {
             background: var(--apple-blue);
             border: none;
             color: #fff;
         }
-        .btn-primary:hover {
-            background: var(--apple-blue-hover);
-            box-shadow: 0 4px 16px rgba(0, 122, 255, 0.3);
-            transform: translateY(-1px);
+        @media (hover: hover) and (pointer: fine) {
+            .btn-primary:hover {
+                background: var(--apple-blue-hover);
+                box-shadow: 0 4px 16px rgba(0, 122, 255, 0.3);
+                transform: translateY(-1px);
+            }
         }
         .btn-primary:active {
             transform: translateY(0) scale(0.98);
@@ -175,9 +207,6 @@
                 border-color: rgba(255,255,255,0.08);
                 box-shadow: 0 4px 24px rgba(0,0,0,0.3);
             }
-            .login-card:hover {
-                box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-            }
             .login-header h1 { color: #f5f5f7; }
             .login-header p { color: #a1a1a6; }
             .form-label { color: #f5f5f7; }
@@ -204,13 +233,18 @@
                 color: #0A84FF;
             }
             .btn-primary { background: #0A84FF; }
-            .btn-primary:hover { 
-                background: #409CFF; 
-                box-shadow: 0 4px 16px rgba(10, 132, 255, 0.35);
-            }
             .login-icon i {
                 color: #0A84FF;
                 filter: drop-shadow(0 4px 12px rgba(10, 132, 255, 0.3));
+            }
+        }
+        @media (prefers-color-scheme: dark) and (hover: hover) and (pointer: fine) {
+            .login-card:hover {
+                box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            }
+            .btn-primary:hover { 
+                background: #409CFF; 
+                box-shadow: 0 4px 16px rgba(10, 132, 255, 0.35);
             }
         }
         @media (max-width: 480px) {

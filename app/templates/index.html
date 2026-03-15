@@ -12,13 +12,6 @@
   <link rel="stylesheet" href="./static/css/bootstrap.min.css">
   <link rel="stylesheet" href="./static/css/bootstrap-icons.min.css">
   <link rel="stylesheet" href="./static/css/dashboard.css">
-  <!-- Bootstrap JS -->
-  <script src="./static/js/jquery-3.5.1.slim.min.js"></script>
-  <script src="./static/js/bootstrap.bundle.min.js"></script>
-  <!-- Vue.js -->
-  <script src="./static/js/vue@2.js"></script>
-  <script src="./static/js/axios.min.js"></script>
-  <script src="./static/js/v-jsoneditor.min.js"></script>
 </head>
 
 <body>
@@ -28,13 +21,13 @@
     <nav class="apple-navbar">
       <a class="navbar-brand" href="#"><i class="bi bi-clouds-fill"></i> 网盘自动转存</a>
       <div class="segmented-control">
-        <button type="button" class="seg-btn" :class="{active: activeTab === 'config'}" @click="changeTab('config')">
+        <button type="button" class="seg-btn" :class="{active: activeTab === 'config'}" :aria-pressed="activeTab === 'config'" @click="changeTab('config')">
           <i class="bi bi-gear-fill"></i> 系统配置
         </button>
-        <button type="button" class="seg-btn" :class="{active: activeTab === 'tasklist'}" @click="changeTab('tasklist')">
+        <button type="button" class="seg-btn" :class="{active: activeTab === 'tasklist'}" :aria-pressed="activeTab === 'tasklist'" @click="changeTab('tasklist')">
           <i class="bi bi-list-task"></i> 任务列表
         </button>
-        <button type="button" class="seg-btn" :class="{active: activeTab === 'sync'}" @click="changeTab('sync')">
+        <button type="button" class="seg-btn" :class="{active: activeTab === 'sync'}" :aria-pressed="activeTab === 'sync'" @click="changeTab('sync')">
           <i class="bi bi-arrow-repeat"></i> 数据同步
         </button>
       </div>
@@ -43,7 +36,7 @@
       </div>
     </nav>
 
-    <div class="main-content">
+    <div class="main-content" ref="mainContent">
       <main>
         <form @submit.prevent="saveConfig" @keydown.enter.prevent>
 
@@ -614,7 +607,7 @@
             </div>
 
             <!-- 同步任务卡片列表 -->
-            <div v-for="(task, index) in syncTasks" :key="'sync_'+index" class="task-card" :class="{'sync-task-running': syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && (syncTaskStatus[task.task_id].status === 'running' || syncTaskStatus[task.task_id].status === 'stopping')), 'disabled': task.enabled === false}">
+            <div v-for="(task, index) in syncTasks" :key="'sync_'+index" class="task-card sync-task-card" :class="{'sync-task-running': syncRunning[task.task_id] || (syncTaskStatus[task.task_id] && (syncTaskStatus[task.task_id].status === 'running' || syncTaskStatus[task.task_id].status === 'stopping')), 'disabled': task.enabled === false}">
               <div class="task-card-header" @click="handleSyncCardClick(task, index)" style="cursor:pointer">
                 <div class="task-info">
                   <span class="collapse-arrow"><i class="bi" :class="task._expanded ? 'bi-caret-down-fill' : 'bi-caret-right-fill'"></i></span>
@@ -924,7 +917,32 @@
                 </ol>
               </nav>
               <!-- 文件列表 -->
-              <table class="table table-hover table-sm">
+              <div v-if="ui.isMobile" class="file-list-mobile">
+                <div v-for="(file, key) in fileSelect.fileList" :key="key" class="file-list-item" @click="fileSelect.selectDir ? (file.dir ? navigateTo(file.fid, file.file_name) : null) : selectStartFid(file.fid)" :class="{'is-clickable': fileSelect.selectDir ? file.dir : true}">
+                  <div class="file-list-leading">
+                    <i class="bi" :class="file.dir ? 'bi-folder-fill text-warning' : 'bi-file-earmark'"></i>
+                  </div>
+                  <div class="file-list-main">
+                    <div class="file-list-name">{{ file.file_name }}</div>
+                    <div class="file-list-meta">
+                      <template v-if="fileSelect.previewRegex">
+                        <span v-if="fileSelect.selectShare" :class="file.file_name_re ? 'text-success' : file.file_name_saved ? 'text-muted' : 'text-danger'">{{ file.file_name_re || file.file_name_saved || '×' }}</span>
+                      </template>
+                      <template v-else>
+                        <span v-if="file.dir">{{ file.include_items }}项</span>
+                        <span v-else>{{ file.size | size }}</span>
+                        <span class="file-list-dot">·</span>
+                        <span>{{ file.updated_at | ts2date }}</span>
+                      </template>
+                    </div>
+                  </div>
+                  <div class="file-list-trailing">
+                    <a v-if="!fileSelect.previewRegex && !fileSelect.selectShare" class="file-list-action" href="#" @click.stop.prevent="deleteFile(file.fid, file.file_name, file.dir)">删除</a>
+                    <i v-else-if="fileSelect.selectDir && file.dir" class="bi bi-chevron-right file-list-chevron"></i>
+                  </div>
+                </div>
+              </div>
+              <table v-else class="table table-hover table-sm">
                 <thead>
                   <tr>
                     <th scope="col" class="cursor-pointer" @click="sortFileList('file_name')">
@@ -994,7 +1012,7 @@
               <button class="btn btn-sm btn-outline-primary mt-2" @click="generateAliyunQrcode">重新生成</button>
             </div>
             <div v-else>
-              <img :src="aliyunQrcode.qrCodeUrl" alt="扫码登录" style="width: 200px; height: 200px;" v-if="aliyunQrcode.qrCodeUrl">
+              <img :src="aliyunQrcode.qrCodeUrl" alt="扫码登录" style="width: 200px; height: 200px;" loading="lazy" decoding="async" v-if="aliyunQrcode.qrCodeUrl">
               <p class="mt-2 mb-1">
                 <span v-if="aliyunQrcode.status === 'NEW'" class="text-muted">请使用阿里云盘 App 扫码</span>
                 <span v-else-if="aliyunQrcode.status === 'SCANED'" class="text-info"><i class="bi bi-check-circle"></i> 已扫码，请在手机上确认</span>
@@ -1122,7 +1140,7 @@
 
             <!-- 列表视图 -->
             <template v-else-if="syncRecords.viewMode === 'table'">
-              <div style="max-height:450px;overflow-y:auto">
+              <div class="sync-records-scroll">
                 <table class="sync-records-table">
                   <thead>
                     <tr>
@@ -1346,6 +1364,12 @@
   </div>
 
 
+  <script src="./static/js/jquery-3.5.1.slim.min.js"></script>
+  <script src="./static/js/bootstrap.bundle.min.js"></script>
+  <script src="./static/js/vue@2.js"></script>
+  <script src="./static/js/axios.min.js"></script>
+  <script src="./static/js/v-jsoneditor.min.js"></script>
+
   <script>
     var app = new Vue({
       el: '#app',
@@ -1418,6 +1442,17 @@
           showSuggestions: false,
           isSearching: false,
           searchTimer: null,
+        },
+        ui: {
+          isMobile: false,
+          isTablet: false,
+          isCoarsePointer: false,
+        },
+        touch: {
+          startX: 0,
+          startY: 0,
+          startTime: 0,
+          startedOnInteractive: false,
         },
         activeTab: 'tasklist',
         configModified: false,
@@ -1553,6 +1588,7 @@
       mounted() {
         this.fetchData();
         this.checkNewVersion();
+        this.updateViewportFlags();
         $('[data-toggle="tooltip"]').tooltip();
         document.addEventListener('keydown', this.handleKeyDown);
         document.addEventListener('click', (e) => {
@@ -1560,6 +1596,13 @@
             this.smart_param.showSuggestions = false;
           }
         });
+        this._tabSwipeEl = this.$refs.mainContent || null;
+        if (this._tabSwipeEl) {
+          this._tabSwipeEl.addEventListener('touchstart', this.onTabSwipeStart, { passive: true });
+          this._tabSwipeEl.addEventListener('touchend', this.onTabSwipeEnd, { passive: true });
+        }
+        window.addEventListener('resize', this.updateViewportFlags, { passive: true });
+        window.addEventListener('orientationchange', this.updateViewportFlags);
         window.addEventListener('beforeunload', this.handleBeforeUnload);
         $('#syncLogModal').on('hidden.bs.modal', () => {
           this.stopSyncLogStream();
@@ -1572,6 +1615,13 @@
         });
       },
       beforeDestroy() {
+        if (this._tabSwipeEl) {
+          this._tabSwipeEl.removeEventListener('touchstart', this.onTabSwipeStart);
+          this._tabSwipeEl.removeEventListener('touchend', this.onTabSwipeEnd);
+          this._tabSwipeEl = null;
+        }
+        window.removeEventListener('resize', this.updateViewportFlags);
+        window.removeEventListener('orientationchange', this.updateViewportFlags);
         window.removeEventListener('beforeunload', this.handleBeforeUnload);
         this.stopSyncPoll();
         this.stopSyncLogStream();
@@ -1609,6 +1659,44 @@
         },
       },
       methods: {
+        updateViewportFlags() {
+          var w = window.innerWidth || document.documentElement.clientWidth || 0;
+          this.ui.isMobile = w <= 768;
+          this.ui.isTablet = w > 768 && w <= 1024;
+          this.ui.isCoarsePointer = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+        },
+        isAnyModalOpen() {
+          return !!document.querySelector('.modal.show');
+        },
+        onTabSwipeStart(e) {
+          if (!this.ui.isMobile) return;
+          if (!e.touches || !e.touches[0]) return;
+          var t = e.touches[0];
+          this.touch.startX = t.clientX;
+          this.touch.startY = t.clientY;
+          this.touch.startTime = Date.now();
+          var target = e.target;
+          this.touch.startedOnInteractive = !!(target && target.closest && target.closest('a,button,input,textarea,select,label,.input-group,.modal,.dropdown-menu,.toast-container'));
+        },
+        onTabSwipeEnd(e) {
+          if (!this.ui.isMobile) return;
+          if (this.touch.startedOnInteractive) return;
+          if (this.isAnyModalOpen()) return;
+          if (!e.changedTouches || !e.changedTouches[0]) return;
+          var t = e.changedTouches[0];
+          var dx = t.clientX - this.touch.startX;
+          var dy = t.clientY - this.touch.startY;
+          var dt = Date.now() - this.touch.startTime;
+          if (dt > 550) return;
+          if (Math.abs(dx) < 80) return;
+          if (Math.abs(dy) > 50) return;
+          var tabs = ['config', 'tasklist', 'sync'];
+          var idx = tabs.indexOf(this.activeTab);
+          if (idx === -1) return;
+          var next = dx < 0 ? idx + 1 : idx - 1;
+          if (next < 0 || next >= tabs.length) return;
+          this.changeTab(tabs[next]);
+        },
         // 检查账户是否为受保护的 token 类型（阿里云盘/迅雷网盘且已填写 cookie）
         isTokenProtectedAccount(account) {
           return (account.drive_type === 'aliyun' || account.drive_type === 'xunlei') && account._tokenSaved;
