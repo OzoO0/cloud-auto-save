@@ -713,16 +713,22 @@ class SyncDB:
                         (now, task_id),
                     )
                     if isinstance(runweek, list):
-                        for w in runweek:
-                            try:
-                                wi = int(w)
-                            except Exception:
-                                continue
-                            if 1 <= wi <= 7:
-                                conn.execute(
-                                    "INSERT INTO task_runweek (task_id, weekday, created_at, updated_at, is_deleted) VALUES (?, ?, ?, ?, 0)",
-                                    (task_id, wi, now, now),
-                                )
+                        if len(runweek) == 0:
+                            conn.execute(
+                                "INSERT INTO task_runweek (task_id, weekday, created_at, updated_at, is_deleted) VALUES (?, 0, ?, ?, 0)",
+                                (task_id, now, now),
+                            )
+                        else:
+                            for w in runweek:
+                                try:
+                                    wi = int(w)
+                                except Exception:
+                                    continue
+                                if 1 <= wi <= 7:
+                                    conn.execute(
+                                        "INSERT INTO task_runweek (task_id, weekday, created_at, updated_at, is_deleted) VALUES (?, ?, ?, ?, 0)",
+                                        (task_id, wi, now, now),
+                                    )
 
                 if incoming_task_uids:
                     placeholders = ",".join("?" * len(incoming_task_uids))
@@ -1048,7 +1054,9 @@ class SyncDB:
                     "SELECT weekday FROM task_runweek WHERE task_id = ? AND is_deleted = 0 ORDER BY weekday ASC",
                     (int(r["id"]),),
                 ).fetchall()]
-                if rw:
+                if rw == [0]:
+                    t["runweek"] = []
+                elif rw:
                     t["runweek"] = rw
                 tasks.append(t)
 
