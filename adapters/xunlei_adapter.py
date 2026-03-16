@@ -108,7 +108,10 @@ def _config_saver_factory(config_path: str):
 def set_config_saver(config_path: str):
     """设置配置保存函数"""
     global _global_config_saver
-    _global_config_saver = _config_saver_factory(config_path)
+    if callable(config_path):
+        _global_config_saver = config_path
+    else:
+        _global_config_saver = _config_saver_factory(config_path)
 
 
 class XunleiAdapter(BaseCloudDriveAdapter):

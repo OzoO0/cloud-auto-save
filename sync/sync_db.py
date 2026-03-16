@@ -6,6 +6,8 @@ import time
 import sqlite3
 import threading
 import logging
+import json
+import uuid
 
 logger = logging.getLogger("sync.db")
 
@@ -35,6 +37,11 @@ class SyncDB:
             conn = self._get_conn()
             try:
                 conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS schema_migrations (
+                        id TEXT PRIMARY KEY,
+                        applied_at INTEGER NOT NULL
+                    );
+
                     CREATE TABLE IF NOT EXISTS sync_records (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         task_id TEXT NOT NULL,
@@ -79,8 +86,16 @@ class SyncDB:
                         files_failed INTEGER DEFAULT 0,
                         lock_time REAL
                     );
+
+                    CREATE TABLE IF NOT EXISTS app_config (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        updated_at REAL NOT NULL
+                    );
                 """)
                 self._ensure_task_status_columns(conn)
+                self._apply_sql_migrations(conn)
+                self._ensure_task_uid_schema(conn)
                 conn.commit()
                 logger.info(f"同步数据库已初始化: {self.db_path}")
             except Exception as e:
@@ -88,6 +103,41 @@ class SyncDB:
                 raise
             finally:
                 conn.close()
+
+    def _apply_sql_migrations(self, conn):
+        migrations_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "migrations")
+        if not os.path.isdir(migrations_dir):
+            return
+        try:
+            rows = conn.execute("SELECT id FROM schema_migrations").fetchall()
+            applied = {row[0] for row in rows}
+        except Exception:
+            applied = set()
+
+        files = []
+        for name in os.listdir(migrations_dir):
+            if name.endswith(".sql"):
+                files.append(os.path.join(migrations_dir, name))
+        files.sort()
+
+        now = int(time.time())
+        for fp in files:
+            mid = os.path.basename(fp)
+            if mid in applied:
+                continue
+            with open(fp, "r", encoding="utf-8") as f:
+                sql = f.read()
+            if not sql.strip():
+                conn.execute(
+                    "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+                    (mid, now),
+                )
+                continue
+            conn.executescript(sql)
+            conn.execute(
+                "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+                (mid, now),
+            )
 
     def _ensure_task_status_columns(self, conn):
         cols = set()
@@ -103,6 +153,937 @@ class SyncDB:
         for name, typ in required.items():
             if name not in cols:
                 conn.execute(f"ALTER TABLE sync_task_status ADD COLUMN {name} {typ}")
+
+    def _ensure_task_uid_schema(self, conn):
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tasks' LIMIT 1"
+        ).fetchone()
+        if not row:
+            return
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+        if "task_uid" not in cols:
+            conn.execute("ALTER TABLE tasks ADD COLUMN task_uid TEXT")
+            cols.add("task_uid")
+        if {"user_id", "task_uid", "is_deleted"}.issubset(cols):
+            conn.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS ux_tasks_user_task_uid_alive
+                   ON tasks(user_id, task_uid)
+                   WHERE is_deleted = 0 AND task_uid IS NOT NULL AND task_uid != ''"""
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_tasks_user_task_uid ON tasks(user_id, task_uid)"
+            )
+
+    def get_app_config(self, key):
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT value FROM app_config WHERE key = ?",
+                (key,),
+            ).fetchone()
+            return row["value"] if row else None
+        finally:
+            conn.close()
+
+    def set_app_config(self, key, value):
+        if key is None:
+            return False
+        if value is None:
+            value = ""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                now = time.time()
+                conn.execute(
+                    """INSERT INTO app_config (key, value, updated_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(key) DO UPDATE SET
+                           value = excluded.value,
+                           updated_at = excluded.updated_at""",
+                    (key, value, now),
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                logger.warning(f"写入 app_config 失败: {e}")
+                return False
+            finally:
+                conn.close()
+
+    def delete_app_config(self, key):
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.execute(
+                    "DELETE FROM app_config WHERE key = ?",
+                    (key,),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.warning(f"删除 app_config 失败: {e}")
+                return False
+            finally:
+                conn.close()
+
+    def list_app_config_keys(self):
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT key FROM app_config ORDER BY key ASC"
+            ).fetchall()
+            return [row["key"] for row in rows]
+        finally:
+            conn.close()
+
+    def execute_sql(self, sql, params=None):
+        if not sql:
+            return {"ok": False, "error": "SQL 为空"}
+        sql_s = str(sql).strip()
+        params = params or []
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cur = conn.execute(sql_s, params)
+                cols = [d[0] for d in cur.description] if cur.description else []
+                rows = cur.fetchall() if cur.description else []
+                conn.commit()
+                return {
+                    "ok": True,
+                    "columns": cols,
+                    "rows": [dict(r) for r in rows] if rows else [],
+                    "rowcount": cur.rowcount,
+                }
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return {"ok": False, "error": str(e)}
+            finally:
+                conn.close()
+
+    def _is_safe_ident(self, name):
+        if not name or not isinstance(name, str):
+            return False
+        for ch in name:
+            if not (ch.isalnum() or ch == "_"):
+                return False
+        return True
+
+    def _ensure_table_allowed(self, table_name):
+        if not self._is_safe_ident(table_name):
+            return False
+        return table_name in set(self.list_tables())
+
+    def list_tables(self):
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                """SELECT name
+                   FROM sqlite_master
+                   WHERE type='table'
+                     AND name NOT LIKE 'sqlite_%'
+                   ORDER BY name ASC"""
+            ).fetchall()
+            return [r["name"] for r in rows]
+        finally:
+            conn.close()
+
+    def get_table_columns(self, table_name):
+        if not self._ensure_table_allowed(table_name):
+            return []
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            cols = []
+            for r in rows:
+                cols.append(
+                    {
+                        "cid": r["cid"],
+                        "name": r["name"],
+                        "type": r["type"],
+                        "notnull": int(r["notnull"]),
+                        "dflt_value": r["dflt_value"],
+                        "pk": int(r["pk"]),
+                    }
+                )
+            return cols
+        finally:
+            conn.close()
+
+    def get_table_meta(self, table_name):
+        cols = self.get_table_columns(table_name)
+        pk_cols = [c["name"] for c in cols if c.get("pk")]
+        pk = pk_cols[0] if len(pk_cols) == 1 else None
+        has_is_deleted = any(c["name"] == "is_deleted" for c in cols)
+        has_updated_at = any(c["name"] == "updated_at" for c in cols)
+        has_created_at = any(c["name"] == "created_at" for c in cols)
+        return {
+            "table": table_name,
+            "columns": cols,
+            "pk": pk,
+            "pk_columns": pk_cols,
+            "has_is_deleted": has_is_deleted,
+            "has_updated_at": has_updated_at,
+            "has_created_at": has_created_at,
+        }
+
+    def get_table_rows(self, table_name, page=1, page_size=50, include_deleted=False, order_by=None, order_dir="DESC", q=None):
+        meta = self.get_table_meta(table_name)
+        cols = [c["name"] for c in meta["columns"]]
+        if not cols:
+            return {"ok": True, "columns": [], "rows": [], "page": page, "page_size": page_size, "total": 0}
+
+        pk = meta["pk"] or "rowid"
+        if order_by and order_by in cols:
+            order_col = order_by
+        else:
+            order_col = pk if pk in cols else cols[0]
+        order_dir = "ASC" if str(order_dir).upper() == "ASC" else "DESC"
+
+        where = []
+        params = []
+        if meta["has_is_deleted"] and not include_deleted:
+            where.append("is_deleted = 0")
+        if q:
+            q_s = str(q)
+            like_cols = []
+            for c in meta["columns"]:
+                ct = (c.get("type") or "").upper()
+                if "CHAR" in ct or "TEXT" in ct or "CLOB" in ct:
+                    like_cols.append(c["name"])
+            if like_cols:
+                parts = []
+                for name in like_cols:
+                    parts.append(f"{name} LIKE ?")
+                    params.append(f"%{q_s}%")
+                where.append("(" + " OR ".join(parts) + ")")
+
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        offset = max(int(page) - 1, 0) * int(page_size)
+        limit = int(page_size)
+
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                total_row = conn.execute(f"SELECT COUNT(*) AS cnt FROM {table_name}{where_sql}", params).fetchone()
+                total = int(total_row["cnt"]) if total_row else 0
+                rows = conn.execute(
+                    f"SELECT * FROM {table_name}{where_sql} ORDER BY {order_col} {order_dir} LIMIT ? OFFSET ?",
+                    [*params, limit, offset],
+                ).fetchall()
+                return {
+                    "ok": True,
+                    "columns": cols,
+                    "rows": [dict(r) for r in rows],
+                    "page": int(page),
+                    "page_size": int(page_size),
+                    "total": total,
+                }
+            finally:
+                conn.close()
+
+    def upsert_table_row(self, table_name, row_data):
+        meta = self.get_table_meta(table_name)
+        pk = meta["pk"]
+        if not pk:
+            return {"ok": False, "error": "该表不支持可视化编辑（需要单列主键）"}
+        cols = {c["name"] for c in meta["columns"]}
+        data = {}
+        for k, v in (row_data or {}).items():
+            if k in cols:
+                data[k] = v
+
+        now = int(time.time())
+        if meta["has_updated_at"] and "updated_at" not in data:
+            data["updated_at"] = now
+        if meta["has_created_at"] and "created_at" not in data:
+            data["created_at"] = now
+        if meta["has_is_deleted"] and "is_deleted" not in data:
+            data["is_deleted"] = 0
+
+        pk_val = data.get(pk)
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                if pk_val is not None and pk_val != "":
+                    exists = conn.execute(f"SELECT 1 FROM {table_name} WHERE {pk} = ? LIMIT 1", (pk_val,)).fetchone()
+                    if exists:
+                        update_cols = [k for k in data.keys() if k != pk and k in cols]
+                        if update_cols:
+                            sets = ", ".join([f"{k} = ?" for k in update_cols])
+                            params = [data[k] for k in update_cols] + [pk_val]
+                            conn.execute(f"UPDATE {table_name} SET {sets} WHERE {pk} = ?", params)
+                        conn.commit()
+                        return {"ok": True, "pk": pk, "pk_value": pk_val, "mode": "update"}
+                insert_cols = [k for k in data.keys() if k in cols and k != pk]
+                vals = [data[k] for k in insert_cols]
+                if insert_cols:
+                    placeholders = ",".join(["?"] * len(insert_cols))
+                    cols_sql = ",".join(insert_cols)
+                    cur = conn.execute(f"INSERT INTO {table_name} ({cols_sql}) VALUES ({placeholders})", vals)
+                else:
+                    cur = conn.execute(f"INSERT INTO {table_name} DEFAULT VALUES")
+                conn.commit()
+                new_id = cur.lastrowid
+                return {"ok": True, "pk": pk, "pk_value": new_id, "mode": "insert"}
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return {"ok": False, "error": str(e)}
+            finally:
+                conn.close()
+
+    def delete_table_row(self, table_name, pk_value):
+        meta = self.get_table_meta(table_name)
+        pk = meta["pk"]
+        if not pk:
+            return {"ok": False, "error": "该表不支持可视化删除（需要单列主键）"}
+        now = int(time.time())
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                if meta["has_is_deleted"]:
+                    if meta["has_updated_at"]:
+                        conn.execute(
+                            f"UPDATE {table_name} SET is_deleted = 1, updated_at = ? WHERE {pk} = ?",
+                            (now, pk_value),
+                        )
+                    else:
+                        conn.execute(
+                            f"UPDATE {table_name} SET is_deleted = 1 WHERE {pk} = ?",
+                            (pk_value,),
+                        )
+                else:
+                    conn.execute(f"DELETE FROM {table_name} WHERE {pk} = ?", (pk_value,))
+                conn.commit()
+                return {"ok": True}
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return {"ok": False, "error": str(e)}
+            finally:
+                conn.close()
+
+    # ========== 配置关系表（JSON ↔︎ DB）==========
+
+    def _table_exists(self, conn, table_name):
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (table_name,),
+        ).fetchone()
+        return bool(row)
+
+    def ensure_user(self, username, password):
+        username = (username or "").strip()
+        password = password if password is not None else ""
+        if not username:
+            username = "admin"
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT id FROM users WHERE username = ? AND is_deleted = 0 LIMIT 1",
+                    (username,),
+                ).fetchone()
+                now = int(time.time())
+                if row:
+                    uid = int(row["id"])
+                    conn.execute(
+                        "UPDATE users SET password = ?, updated_at = ? WHERE id = ?",
+                        (password, now, uid),
+                    )
+                else:
+                    cur = conn.execute(
+                        "INSERT INTO users (username, password, created_at, updated_at, is_deleted) VALUES (?, ?, ?, ?, 0)",
+                        (username, password, now, now),
+                    )
+                    uid = int(cur.lastrowid)
+                conn.commit()
+                return uid
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                conn.close()
+
+    def get_system_setting(self, user_id, key, default=None):
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT value FROM system_settings WHERE user_id = ? AND key = ? AND is_deleted = 0 LIMIT 1",
+                (user_id, key),
+            ).fetchone()
+            return row["value"] if row else default
+        finally:
+            conn.close()
+
+    def set_system_setting(self, user_id, key, value):
+        if not key:
+            return False
+        val = "" if value is None else str(value)
+        now = int(time.time())
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT id FROM system_settings WHERE user_id = ? AND key = ? AND is_deleted = 0 LIMIT 1",
+                    (user_id, key),
+                ).fetchone()
+                if row:
+                    conn.execute(
+                        "UPDATE system_settings SET value = ?, updated_at = ? WHERE id = ?",
+                        (val, now, int(row["id"])),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO system_settings (user_id, key, value, created_at, updated_at, is_deleted) VALUES (?, ?, ?, ?, ?, 0)",
+                        (user_id, key, val, now, now),
+                    )
+                conn.commit()
+                return True
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return False
+            finally:
+                conn.close()
+
+    def import_config_dict(self, config_dict):
+        if not isinstance(config_dict, dict):
+            config_dict = {}
+        webui = config_dict.get("webui") or {}
+        uid = self.ensure_user(webui.get("username") or "admin", webui.get("password") or "admin123")
+
+        now = int(time.time())
+        accounts = config_dict.get("accounts")
+        if not isinstance(accounts, list):
+            accounts = []
+        tasklist = config_dict.get("tasklist")
+        if not isinstance(tasklist, list):
+            tasklist = []
+        magic_regex = config_dict.get("magic_regex")
+        if not isinstance(magic_regex, dict):
+            magic_regex = {}
+        plugins = config_dict.get("plugins")
+        if not isinstance(plugins, dict):
+            plugins = {}
+        push_config = config_dict.get("push_config")
+        if not isinstance(push_config, dict):
+            push_config = {}
+        source = config_dict.get("source")
+        if not isinstance(source, dict):
+            source = {}
+        sync_tasks = config_dict.get("sync_tasks")
+        if not isinstance(sync_tasks, list):
+            sync_tasks = []
+
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+
+                conn.execute("UPDATE drive_accounts SET is_deleted = 1, updated_at = ? WHERE user_id = ? AND is_deleted = 0", (now, uid))
+                for acc in accounts:
+                    if not isinstance(acc, dict):
+                        continue
+                    name = str(acc.get("name", "") or "").strip()
+                    drive_type = str(acc.get("drive_type", "quark") or "quark").strip()
+                    cookie = str(acc.get("cookie", "") or "")
+                    enabled = 1 if acc.get("enabled", True) else 0
+                    is_default = 1 if acc.get("default") or acc.get("is_default") else 0
+                    token_updated_at = int(acc.get("_token_updated_at") or 0)
+                    if not name:
+                        name = f"{drive_type}"
+                    conn.execute(
+                        """INSERT INTO drive_accounts
+                           (user_id, name, drive_type, cookie, enabled, is_default, token_updated_at, created_at, updated_at, is_deleted)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                        (uid, name, drive_type, cookie, enabled, is_default, token_updated_at, now, now),
+                    )
+
+                incoming_task_uids = set()
+                for t in tasklist:
+                    if not isinstance(t, dict):
+                        continue
+                    base = dict(t)
+                    addition = base.pop("addition", None)
+                    runweek = base.pop("runweek", None)
+                    taskname = str(base.get("taskname", "") or "")
+                    shareurl = str(base.get("shareurl", "") or "")
+                    savepath = str(base.get("savepath", "") or "")
+                    task_uid = str(base.get("task_uid", "") or "").strip()
+
+                    if not taskname or not shareurl or not savepath:
+                        continue
+
+                    existing = None
+                    if task_uid:
+                        # 优先使用 task_uid 查找
+                        existing = conn.execute(
+                            "SELECT id, is_deleted, task_uid FROM tasks WHERE user_id = ? AND task_uid = ? LIMIT 1",
+                            (uid, task_uid),
+                        ).fetchone()
+                    
+                    if not existing:
+                        # 降级用 shareurl+savepath 匹配（用于旧数据首次迁移补齐 task_uid）
+                        existing = conn.execute(
+                            """SELECT id, is_deleted, task_uid
+                               FROM tasks
+                               WHERE user_id = ? AND shareurl = ? AND savepath = ?
+                               ORDER BY is_deleted ASC, updated_at DESC, id DESC
+                               LIMIT 1""",
+                            (uid, shareurl, savepath),
+                        ).fetchone()
+                    
+                    if not existing and not task_uid:
+                        # 新任务且无 UID -> 生成
+                        task_uid = str(uuid.uuid4())
+                    elif existing and not task_uid:
+                         # 旧任务无 UID -> 使用现有或生成
+                         if existing["task_uid"]:
+                             task_uid = existing["task_uid"]
+                         else:
+                             task_uid = str(uuid.uuid4())
+                    
+                    incoming_task_uids.add(task_uid)
+
+                    pattern = base.get("pattern")
+                    replace = base.get("replace")
+                    enddate = base.get("enddate")
+                    ignore_extension = 1 if base.get("ignore_extension") else 0
+                    sort_index = base.get("sort_index")
+                    startfid = base.get("startfid")
+                    account_name = base.get("account_name")
+                    update_subdir = base.get("update_subdir")
+                    enabled = 0 if base.get("enabled") is False else 1
+                    known_keys = {
+                        "task_uid", "taskname", "shareurl", "savepath", "pattern", "replace", "enddate",
+                        "ignore_extension", "sort_index", "startfid", "account_name", "update_subdir", "enabled",
+                    }
+                    extra = {k: v for k, v in base.items() if k not in known_keys}
+                    addition_json = json.dumps(addition, ensure_ascii=False) if isinstance(addition, dict) else None
+                    extra_json = json.dumps(extra, ensure_ascii=False) if extra else None
+                    
+                    if existing:
+                        task_id = int(existing["id"])
+                        conn.execute(
+                            """UPDATE tasks SET
+                                   task_uid = ?, taskname = ?, shareurl = ?, savepath = ?, pattern = ?, replace = ?, enddate = ?,
+                                   ignore_extension = ?, sort_index = ?, startfid = ?, account_name = ?, update_subdir = ?,
+                                   addition_json = ?, extra_json = ?, enabled = ?, is_deleted = 0, updated_at = ?
+                               WHERE id = ?""",
+                            (
+                                task_uid, taskname, shareurl, savepath, pattern, replace, enddate,
+                                ignore_extension, sort_index, startfid, account_name, update_subdir,
+                                addition_json, extra_json, enabled, now, task_id,
+                            ),
+                        )
+                    else:
+                        cur = conn.execute(
+                            """INSERT INTO tasks
+                               (user_id, task_uid, taskname, shareurl, savepath, pattern, replace, enddate,
+                                ignore_extension, sort_index, startfid, account_name, update_subdir,
+                                addition_json, extra_json, enabled, created_at, updated_at, is_deleted)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                            (
+                                uid, task_uid, taskname, shareurl, savepath, pattern, replace, enddate,
+                                ignore_extension, sort_index, startfid, account_name, update_subdir,
+                                addition_json, extra_json, enabled, now, now,
+                            ),
+                        )
+                        task_id = int(cur.lastrowid)
+
+                    conn.execute(
+                        "UPDATE task_runweek SET is_deleted = 1, updated_at = ? WHERE task_id = ? AND is_deleted = 0",
+                        (now, task_id),
+                    )
+                    if isinstance(runweek, list):
+                        for w in runweek:
+                            try:
+                                wi = int(w)
+                            except Exception:
+                                continue
+                            if 1 <= wi <= 7:
+                                conn.execute(
+                                    "INSERT INTO task_runweek (task_id, weekday, created_at, updated_at, is_deleted) VALUES (?, ?, ?, ?, 0)",
+                                    (task_id, wi, now, now),
+                                )
+
+                if incoming_task_uids:
+                    placeholders = ",".join("?" * len(incoming_task_uids))
+                    conn.execute(
+                        f"""UPDATE tasks
+                            SET is_deleted = 1, updated_at = ?
+                            WHERE user_id = ?
+                              AND is_deleted = 0
+                              AND (task_uid IS NULL OR task_uid NOT IN ({placeholders}))""",
+                        (now, uid, *incoming_task_uids),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE tasks SET is_deleted = 1, updated_at = ? WHERE user_id = ? AND is_deleted = 0",
+                        (now, uid),
+                    )
+
+                conn.execute("UPDATE regex_rules SET is_deleted = 1, updated_at = ? WHERE user_id = ? AND is_deleted = 0", (now, uid))
+                for name, rule in magic_regex.items():
+                    if not isinstance(rule, dict):
+                        continue
+                    pattern = rule.get("pattern")
+                    replace = rule.get("replace", "")
+                    if not pattern:
+                        continue
+                    conn.execute(
+                        """INSERT INTO regex_rules
+                           (user_id, name, pattern, replace, created_at, updated_at, is_deleted)
+                           VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                        (uid, str(name), str(pattern), str(replace), now, now),
+                    )
+
+                conn.execute("UPDATE plugin_configs SET is_deleted = 1, updated_at = ? WHERE user_id = ? AND is_deleted = 0", (now, uid))
+                for plugin_key, cfg in plugins.items():
+                    enabled = 1
+                    config_json = None
+                    if isinstance(cfg, dict):
+                        enabled = 0 if cfg.get("enabled") is False else 1
+                        config_json = json.dumps(cfg, ensure_ascii=False)
+                    elif cfg is not None:
+                        config_json = json.dumps(cfg, ensure_ascii=False)
+                    conn.execute(
+                        """INSERT INTO plugin_configs
+                           (user_id, plugin_key, enabled, config_json, created_at, updated_at, is_deleted)
+                           VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                        (uid, str(plugin_key), enabled, config_json, now, now),
+                    )
+
+                conn.execute("UPDATE notification_channels SET is_deleted = 1, updated_at = ? WHERE user_id = ? AND is_deleted = 0", (now, uid))
+                for k, v in push_config.items():
+                    if k is None:
+                        continue
+                    enabled = 1
+                    if isinstance(v, bool):
+                        enabled = 1 if v else 0
+                        config_json = None
+                    else:
+                        config_json = json.dumps({str(k): v}, ensure_ascii=False)
+                    conn.execute(
+                        """INSERT INTO notification_channels
+                           (user_id, channel_key, enabled, config_json, created_at, updated_at, is_deleted)
+                           VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                        (uid, str(k), enabled, config_json, now, now),
+                    )
+
+                conn.execute("UPDATE data_sources SET is_deleted = 1, updated_at = ? WHERE user_id = ? AND is_deleted = 0", (now, uid))
+                for source_key, cfg in source.items():
+                    if source_key is None:
+                        continue
+                    enabled = 1
+                    if isinstance(cfg, dict):
+                        if str(cfg.get("enable", "true")).lower() == "false":
+                            enabled = 0
+                    config_json = json.dumps(cfg, ensure_ascii=False) if cfg is not None else None
+                    conn.execute(
+                        """INSERT INTO data_sources
+                           (user_id, source_key, enabled, config_json, created_at, updated_at, is_deleted)
+                           VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                        (uid, str(source_key), enabled, config_json, now, now),
+                    )
+
+                conn.execute("UPDATE sync_task_configs SET is_deleted = 1, updated_at = ? WHERE user_id = ? AND is_deleted = 0", (now, uid))
+                for st in sync_tasks:
+                    if not isinstance(st, dict):
+                        continue
+                    task_id = str(st.get("task_id", "") or "").strip()
+                    source_dir = str(st.get("source_dir", "") or "")
+                    dest_dir = str(st.get("dest_dir", "") or "")
+                    if not task_id or not source_dir or not dest_dir:
+                        continue
+                    enabled = 1 if st.get("enabled", True) else 0
+                    file_type_filter = st.get("file_type_filter")
+                    file_type_filter_json = json.dumps(file_type_filter, ensure_ascii=False) if isinstance(file_type_filter, list) else None
+                    known_keys = {
+                        "task_id", "taskname", "source_dir", "dest_dir", "sync_mode", "match_mode", "cron",
+                        "enabled", "regex_filter", "file_type_filter", "exclude_empty_dirs",
+                        "notify_on_complete", "notify_on_error",
+                    }
+                    extra = {k: v for k, v in st.items() if k not in known_keys}
+                    extra_json = json.dumps(extra, ensure_ascii=False) if extra else None
+                    conn.execute(
+                        """INSERT INTO sync_task_configs
+                           (user_id, task_id, taskname, source_dir, dest_dir, sync_mode, match_mode, cron, enabled,
+                            regex_filter, file_type_filter_json, exclude_empty_dirs, notify_on_complete, notify_on_error,
+                            extra_json, created_at, updated_at, is_deleted)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                        (
+                            uid,
+                            task_id,
+                            st.get("taskname"),
+                            source_dir,
+                            dest_dir,
+                            st.get("sync_mode"),
+                            st.get("match_mode"),
+                            st.get("cron"),
+                            enabled,
+                            st.get("regex_filter"),
+                            file_type_filter_json,
+                            1 if st.get("exclude_empty_dirs") else 0,
+                            1 if st.get("notify_on_complete", True) else 0,
+                            1 if st.get("notify_on_error", True) else 0,
+                            extra_json,
+                            now,
+                            now,
+                        ),
+                    )
+
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                conn.close()
+
+        self.set_system_setting(uid, "crontab", config_dict.get("crontab") or "")
+        self.set_system_setting(uid, "multi_drive_support", "true" if config_dict.get("multi_drive_support") else "false")
+        self.set_system_setting(uid, "config_storage_mode", "relational")
+        return uid
+
+    def export_config_dict(self, username="admin"):
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT id, username, password FROM users WHERE username = ? AND is_deleted = 0 LIMIT 1",
+                (username,),
+            ).fetchone()
+            if not row:
+                return None
+            uid = int(row["id"])
+            user_block = {"username": row["username"], "password": row["password"]}
+
+            accounts = []
+            for r in conn.execute(
+                """SELECT name, drive_type, cookie, enabled, is_default, token_updated_at
+                   FROM drive_accounts
+                   WHERE user_id = ? AND is_deleted = 0
+                   ORDER BY id ASC""",
+                (uid,),
+            ).fetchall():
+                accounts.append(
+                    {
+                        "name": r["name"],
+                        "drive_type": r["drive_type"],
+                        "cookie": r["cookie"],
+                        "enabled": bool(r["enabled"]),
+                        "default": bool(r["is_default"]),
+                        "_token_updated_at": int(r["token_updated_at"] or 0),
+                    }
+                )
+
+            magic_regex = {}
+            for r in conn.execute(
+                """SELECT name, pattern, replace FROM regex_rules
+                   WHERE user_id = ? AND is_deleted = 0
+                   ORDER BY id ASC""",
+                (uid,),
+            ).fetchall():
+                magic_regex[r["name"]] = {"pattern": r["pattern"], "replace": r["replace"]}
+
+            plugins = {}
+            for r in conn.execute(
+                """SELECT plugin_key, enabled, config_json FROM plugin_configs
+                   WHERE user_id = ? AND is_deleted = 0
+                   ORDER BY id ASC""",
+                (uid,),
+            ).fetchall():
+                if r["config_json"]:
+                    try:
+                        cfg = json.loads(r["config_json"])
+                    except Exception:
+                        cfg = r["config_json"]
+                else:
+                    cfg = {}
+                plugins[r["plugin_key"]] = cfg
+
+            push_config = {}
+            for r in conn.execute(
+                """SELECT channel_key, enabled, config_json FROM notification_channels
+                   WHERE user_id = ? AND is_deleted = 0
+                   ORDER BY id ASC""",
+                (uid,),
+            ).fetchall():
+                if r["config_json"]:
+                    try:
+                        payload = json.loads(r["config_json"])
+                    except Exception:
+                        payload = {}
+                    if isinstance(payload, dict) and r["channel_key"] in payload:
+                        push_config[r["channel_key"]] = payload[r["channel_key"]]
+                    else:
+                        push_config[r["channel_key"]] = payload
+                else:
+                    push_config[r["channel_key"]] = bool(r["enabled"])
+
+            source = {}
+            for r in conn.execute(
+                """SELECT source_key, enabled, config_json FROM data_sources
+                   WHERE user_id = ? AND is_deleted = 0
+                   ORDER BY id ASC""",
+                (uid,),
+            ).fetchall():
+                if r["config_json"]:
+                    try:
+                        payload = json.loads(r["config_json"])
+                    except Exception:
+                        payload = {}
+                else:
+                    payload = {}
+                if isinstance(payload, dict) and "enable" in payload:
+                    payload["enable"] = "" if bool(r["enabled"]) else "false"
+                source[r["source_key"]] = payload
+
+            sync_tasks = []
+            for r in conn.execute(
+                """SELECT task_id, taskname, source_dir, dest_dir, sync_mode, match_mode, cron, enabled,
+                          regex_filter, file_type_filter_json, exclude_empty_dirs, notify_on_complete, notify_on_error, extra_json
+                   FROM sync_task_configs
+                   WHERE user_id = ? AND is_deleted = 0
+                   ORDER BY id ASC""",
+                (uid,),
+            ).fetchall():
+                st = {
+                    "task_id": r["task_id"],
+                    "taskname": r["taskname"],
+                    "source_dir": r["source_dir"],
+                    "dest_dir": r["dest_dir"],
+                    "sync_mode": r["sync_mode"],
+                    "match_mode": r["match_mode"],
+                    "cron": r["cron"],
+                    "enabled": bool(r["enabled"]),
+                    "exclude_empty_dirs": bool(r["exclude_empty_dirs"]),
+                    "notify_on_complete": bool(r["notify_on_complete"]),
+                    "notify_on_error": bool(r["notify_on_error"]),
+                }
+                if r["regex_filter"] is not None:
+                    st["regex_filter"] = r["regex_filter"]
+                if r["file_type_filter_json"]:
+                    try:
+                        st["file_type_filter"] = json.loads(r["file_type_filter_json"])
+                    except Exception:
+                        st["file_type_filter"] = []
+                if r["extra_json"]:
+                    try:
+                        extra = json.loads(r["extra_json"])
+                        if isinstance(extra, dict):
+                            st.update(extra)
+                    except Exception:
+                        pass
+                sync_tasks.append(st)
+
+            tasks = []
+            for r in conn.execute(
+                """SELECT id, task_uid, taskname, shareurl, savepath, pattern, replace, enddate,
+                          ignore_extension, sort_index, startfid, account_name, update_subdir,
+                          addition_json, extra_json, enabled
+                   FROM tasks
+                   WHERE user_id = ? AND is_deleted = 0
+                   ORDER BY id ASC""",
+                (uid,),
+            ).fetchall():
+                t = {
+                    "task_uid": r["task_uid"],
+                    "taskname": r["taskname"],
+                    "shareurl": r["shareurl"],
+                    "savepath": r["savepath"],
+                }
+                if r["pattern"] is not None:
+                    t["pattern"] = r["pattern"]
+                if r["replace"] is not None:
+                    t["replace"] = r["replace"]
+                if r["enddate"] is not None:
+                    t["enddate"] = r["enddate"]
+                if r["ignore_extension"]:
+                    t["ignore_extension"] = True
+                if r["sort_index"] is not None and r["sort_index"] != "":
+                    t["sort_index"] = r["sort_index"]
+                if r["startfid"] is not None:
+                    t["startfid"] = r["startfid"]
+                if r["account_name"] is not None:
+                    t["account_name"] = r["account_name"]
+                if r["update_subdir"] is not None:
+                    t["update_subdir"] = r["update_subdir"]
+                if not bool(r["enabled"]):
+                    t["enabled"] = False
+                if r["addition_json"]:
+                    try:
+                        add = json.loads(r["addition_json"])
+                        if isinstance(add, dict):
+                            t["addition"] = add
+                    except Exception:
+                        pass
+                if r["extra_json"]:
+                    try:
+                        extra = json.loads(r["extra_json"])
+                        if isinstance(extra, dict):
+                            t.update(extra)
+                    except Exception:
+                        pass
+                rw = [int(x["weekday"]) for x in conn.execute(
+                    "SELECT weekday FROM task_runweek WHERE task_id = ? AND is_deleted = 0 ORDER BY weekday ASC",
+                    (int(r["id"]),),
+                ).fetchall()]
+                if rw:
+                    t["runweek"] = rw
+                tasks.append(t)
+
+            crontab = self.get_system_setting(uid, "crontab", "") or ""
+            mds = self.get_system_setting(uid, "multi_drive_support", "false")
+            multi_drive_support = str(mds).lower() == "true"
+
+            out = {
+                "push_config": push_config,
+                "plugins": plugins,
+                "magic_regex": magic_regex,
+                "tasklist": tasks,
+                "webui": user_block,
+                "crontab": crontab,
+                "multi_drive_support": multi_drive_support,
+                "accounts": accounts,
+                "source": source,
+                "sync_tasks": sync_tasks,
+            }
+            return out
+        finally:
+            conn.close()
+
+    def migrate_app_config_to_relational(self, key="quark_config"):
+        raw = self.get_app_config(key)
+        if not raw:
+            return False
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return False
+        if not isinstance(data, dict):
+            return False
+        self.import_config_dict(data)
+        return True
 
     # ========== 任务锁管理 ==========
 

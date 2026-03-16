@@ -1,7 +1,14 @@
 {
-  "cookie": [
-    "Your pan.quark.cn Cookie1, Only this one will do save task."
+  "accounts": [
+    {
+      "name": "夸克1",
+      "drive_type": "quark",
+      "cookie": "",
+      "enabled": true,
+      "default": true
+    }
   ],
+  "multi_drive_support": true,
   "push_config": {
     "QUARK_SIGN_NOTIFY": true,
     "其他推送渠道//此项可删": "配置方法同青龙"

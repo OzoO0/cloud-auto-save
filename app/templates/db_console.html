@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>DB 管理</title>
+  <link rel="stylesheet" href="./static/css/bootstrap.min.css">
+  <link rel="stylesheet" href="./static/css/bootstrap-icons.min.css">
+</head>
+<body class="bg-light">
+  <div id="app" class="container-fluid py-3 px-3 px-md-4">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+      <div class="d-flex align-items-center">
+        <i class="bi bi-database me-2"></i>
+        <h3 class="mb-0">DB 管理</h3>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <span class="text-muted small">v[[ version ]]</span>
+        <a class="btn btn-outline-secondary btn-sm" href="/">返回</a>
+      </div>
+    </div>
+
+    <div class="alert alert-info small mb-3">
+      该页面提供类似 phpMyAdmin 的可视化数据管理：选择表 → 浏览/搜索 → 新增/编辑/删除。
+    </div>
+
+    <ul class="nav nav-tabs mb-3">
+      <li class="nav-item">
+        <a class="nav-link" href="#" :class="{active: tab==='db'}" @click.prevent="tab='db'">数据库</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" href="#" :class="{active: tab==='local'}" @click.prevent="tab='local'">本地模式</a>
+      </li>
+    </ul>
+
+    <div v-show="tab==='db'">
+      <div class="row g-3">
+        <div class="col-12 col-md-3">
+          <div class="card">
+            <div class="card-body">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="fw-semibold">表</div>
+                <button class="btn btn-outline-primary btn-sm" @click="loadTables" :disabled="loadingTables">
+                  <span v-if="loadingTables" class="spinner-border spinner-border-sm me-1"></span>
+                  刷新
+                </button>
+              </div>
+              <input class="form-control form-control-sm mb-2" v-model="tableFilter" placeholder="过滤表名">
+              <div class="list-group" style="max-height: 65vh; overflow: auto;">
+                <a href="#" class="list-group-item list-group-item-action py-2"
+                   v-for="t in filteredTables" :key="t"
+                   :class="{active: t===selectedTable}"
+                   @click.prevent="selectTable(t)">
+                  <span class="font-monospace">{{ t }}</span>
+                </a>
+                <div v-if="!filteredTables.length" class="text-muted small py-2">暂无表</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12 col-md-9">
+          <div class="card mb-3">
+            <div class="card-body">
+              <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                <div class="fw-semibold">
+                  <span v-if="selectedTable" class="font-monospace">{{ selectedTable }}</span>
+                  <span v-else class="text-muted">请选择表</span>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                  <div class="form-check form-switch mb-0" v-if="meta && meta.has_is_deleted">
+                    <input class="form-check-input" type="checkbox" id="includeDeleted" v-model="includeDeleted" @change="loadRows">
+                    <label class="form-check-label small" for="includeDeleted">包含已删除</label>
+                  </div>
+                  <button class="btn btn-outline-success btn-sm" @click="openAdd" :disabled="!canEdit"><i class="bi bi-plus-lg"></i> 新增</button>
+                  <button class="btn btn-outline-secondary btn-sm" @click="loadRows" :disabled="!selectedTable || loadingRows">
+                    <span v-if="loadingRows" class="spinner-border spinner-border-sm me-1"></span>
+                    刷新
+                  </button>
+                </div>
+              </div>
+
+              <div class="row g-2 align-items-center mb-2" v-if="selectedTable">
+                <div class="col-12 col-md-6">
+                  <input class="form-control form-control-sm" v-model="q" @keyup.enter="loadRows" placeholder="搜索（仅对 TEXT 列生效）">
+                </div>
+                <div class="col-6 col-md-3">
+                  <select class="form-select form-select-sm" v-model.number="pageSize" @change="page=1;loadRows()">
+                    <option :value="20">20</option>
+                    <option :value="50">50</option>
+                    <option :value="100">100</option>
+                  </select>
+                </div>
+                <div class="col-6 col-md-3 text-end">
+                  <span class="text-muted small">总数：{{ total }}</span>
+                </div>
+              </div>
+
+              <div v-if="error" class="alert alert-danger small mb-2">{{ error }}</div>
+
+              <div class="table-responsive" v-if="selectedTable">
+                <table class="table table-sm table-striped align-middle">
+                  <thead>
+                    <tr>
+                      <th style="width: 120px;">操作</th>
+                      <th v-for="c in columns" :key="c" class="font-monospace">{{ c }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(r, idx) in rows" :key="rowKey(r, idx)">
+                      <td>
+                        <div class="btn-group btn-group-sm">
+                          <button class="btn btn-outline-primary" @click="openEdit(r)" :disabled="!canEdit"><i class="bi bi-pencil"></i></button>
+                          <button class="btn btn-outline-danger" @click="deleteRow(r)" :disabled="!canEdit"><i class="bi bi-trash"></i></button>
+                        </div>
+                      </td>
+                      <td v-for="c in columns" :key="c">
+                        <div style="max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                          {{ formatCell(r[c]) }}
+                        </div>
+                      </td>
+                    </tr>
+                    <tr v-if="!rows.length">
+                      <td :colspan="columns.length + 1" class="text-muted small">暂无数据</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="d-flex align-items-center justify-content-between mt-2" v-if="selectedTable">
+                <button class="btn btn-outline-secondary btn-sm" @click="prevPage" :disabled="page<=1 || loadingRows">上一页</button>
+                <span class="text-muted small">第 {{ page }} 页</span>
+                <button class="btn btn-outline-secondary btn-sm" @click="nextPage" :disabled="page>=maxPage || loadingRows">下一页</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" v-if="meta && meta.columns && meta.columns.length">
+            <div class="card-body">
+              <div class="fw-semibold mb-2">表结构</div>
+              <div class="table-responsive">
+                <table class="table table-sm table-bordered align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>列</th>
+                      <th>类型</th>
+                      <th>非空</th>
+                      <th>默认值</th>
+                      <th>主键</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="col in meta.columns" :key="col.name">
+                      <td class="font-monospace">{{ col.name }}</td>
+                      <td class="font-monospace">{{ col.type }}</td>
+                      <td>{{ col.notnull ? 'Y' : '' }}</td>
+                      <td class="font-monospace">{{ col.dflt_value }}</td>
+                      <td>{{ col.pk ? 'Y' : '' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="text-muted small mt-2" v-if="meta.pk_columns && meta.pk_columns.length !== 1">
+                该表为复合主键或无主键，当前仅提供浏览。
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-show="tab==='local'">
+      <div class="card mb-3">
+        <div class="card-body">
+          <div class="fw-semibold mb-2">本地模式数据</div>
+          <div class="small text-muted mb-2">不访问后端数据库，直接在浏览器中编辑数据。</div>
+          <div class="d-flex gap-2 mb-2">
+            <button class="btn btn-outline-primary btn-sm" @click="addLocalRow">新增行</button>
+            <button class="btn btn-outline-secondary btn-sm" @click="exportLocal">导出 JSON</button>
+            <button class="btn btn-outline-secondary btn-sm" @click="importLocal">导入 JSON</button>
+            <button class="btn btn-outline-danger btn-sm" @click="resetLocal">重置</button>
+          </div>
+          <textarea class="form-control mb-3" rows="6" v-model="localJson" placeholder="这里显示导出 JSON，也可粘贴导入 JSON"></textarea>
+          <div class="table-responsive" v-if="localRows.length">
+            <table class="table table-sm table-bordered align-middle">
+              <thead>
+                <tr>
+                  <th style="width: 40px;">#</th>
+                  <th>key</th>
+                  <th>value</th>
+                  <th style="width: 80px;">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, idx) in localRows" :key="idx">
+                  <td class="text-muted">{{ idx + 1 }}</td>
+                  <td><input class="form-control form-control-sm" v-model="row.key"></td>
+                  <td><input class="form-control form-control-sm" v-model="row.value"></td>
+                  <td><button class="btn btn-outline-danger btn-sm" @click="removeLocalRow(idx)">删除</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else class="text-muted small">暂无数据。</div>
+          <div v-if="localError" class="alert alert-danger mt-3 mb-0 small">{{ localError }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal fade show" tabindex="-1" role="dialog" v-if="editor.open" style="display:block; background: rgba(0,0,0,.35);">
+      <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">{{ editor.mode==='add' ? '新增行' : '编辑行' }}</h5>
+            <button type="button" class="btn-close" @click="closeEditor"></button>
+          </div>
+          <div class="modal-body">
+            <div v-if="editorError" class="alert alert-danger small">{{ editorError }}</div>
+            <div class="row g-2">
+              <div class="col-12 col-md-6" v-for="col in (meta ? meta.columns : [])" :key="col.name">
+                <label class="form-label small mb-1 font-monospace">{{ col.name }}</label>
+                <input class="form-control form-control-sm" v-model="editor.row[col.name]" :disabled="col.pk && editor.mode==='add'">
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" @click="closeEditor">取消</button>
+            <button type="button" class="btn btn-primary" @click="saveEditor" :disabled="savingRow">
+              <span v-if="savingRow" class="spinner-border spinner-border-sm me-1"></span>
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="./static/js/vue@2.js"></script>
+  <script src="./static/js/axios.min.js"></script>
+  <script>
+    new Vue({
+      el: '#app',
+      data: {
+        tab: 'db',
+        tables: [],
+        tableFilter: '',
+        selectedTable: '',
+        meta: null,
+        columns: [],
+        rows: [],
+        total: 0,
+        page: 1,
+        pageSize: 50,
+        includeDeleted: false,
+        q: '',
+        loadingTables: false,
+        loadingRows: false,
+        error: '',
+        editor: { open: false, mode: 'edit', row: {} },
+        savingRow: false,
+        editorError: '',
+        localRows: [
+          { key: 'example', value: 'value' }
+        ],
+        localJson: '',
+        localError: ''
+      },
+      created() {
+        this.loadTables();
+      },
+      computed: {
+        filteredTables() {
+          const f = (this.tableFilter || '').toLowerCase();
+          if (!f) return this.tables;
+          return this.tables.filter(t => String(t).toLowerCase().includes(f));
+        },
+        maxPage() {
+          const ps = this.pageSize || 50;
+          const t = this.total || 0;
+          return Math.max(1, Math.ceil(t / ps));
+        },
+        canEdit() {
+          return !!(this.selectedTable && this.meta && this.meta.pk);
+        }
+      },
+      methods: {
+        formatCell(v) {
+          if (v === null || v === undefined) return '';
+          if (typeof v === 'object') {
+            try { return JSON.stringify(v); } catch (e) { return String(v); }
+          }
+          return String(v);
+        },
+        rowKey(r, idx) {
+          if (this.meta && this.meta.pk && r && r[this.meta.pk] !== undefined) return `${r[this.meta.pk]}`;
+          return `${idx}`;
+        },
+        async loadTables() {
+          this.loadingTables = true;
+          this.error = '';
+          try {
+            const r = await axios.get('/api/db/tables');
+            if (r.data && r.data.success) {
+              this.tables = (r.data.data && r.data.data.tables) ? r.data.data.tables : [];
+              if (!this.selectedTable && this.tables.length) {
+                this.selectTable(this.tables[0]);
+              }
+            } else {
+              this.error = (r.data && r.data.message) ? r.data.message : '加载失败';
+            }
+          } catch (e) {
+            this.error = (e && e.message) ? e.message : '加载失败';
+          } finally {
+            this.loadingTables = false;
+          }
+        },
+        async selectTable(t) {
+          this.selectedTable = t;
+          this.page = 1;
+          this.q = '';
+          this.includeDeleted = false;
+          await this.loadMeta();
+          await this.loadRows();
+        },
+        async loadMeta() {
+          this.error = '';
+          this.meta = null;
+          this.columns = [];
+          if (!this.selectedTable) return;
+          try {
+            const r = await axios.get(`/api/db/table/${encodeURIComponent(this.selectedTable)}/meta`);
+            if (r.data && r.data.success) {
+              this.meta = r.data.data;
+              this.columns = (this.meta && this.meta.columns) ? this.meta.columns.map(c => c.name) : [];
+            } else {
+              this.error = (r.data && r.data.message) ? r.data.message : '加载失败';
+            }
+          } catch (e) {
+            this.error = (e && e.message) ? e.message : '加载失败';
+          }
+        },
+        async loadRows() {
+          this.error = '';
+          this.loadingRows = true;
+          this.rows = [];
+          this.total = 0;
+          if (!this.selectedTable) {
+            this.loadingRows = false;
+            return;
+          }
+          try {
+            const params = {
+              page: this.page,
+              page_size: this.pageSize,
+              include_deleted: this.includeDeleted ? 1 : 0
+            };
+            if (this.q) params.q = this.q;
+            const r = await axios.get(`/api/db/table/${encodeURIComponent(this.selectedTable)}/rows`, { params });
+            if (r.data && r.data.success) {
+              const d = r.data.data || {};
+              this.rows = d.rows || [];
+              this.total = d.total || 0;
+              if (!this.columns.length && d.columns) this.columns = d.columns;
+            } else {
+              this.error = (r.data && r.data.message) ? r.data.message : '查询失败';
+            }
+          } catch (e) {
+            this.error = (e && e.message) ? e.message : '查询失败';
+          } finally {
+            this.loadingRows = false;
+          }
+        },
+        prevPage() {
+          if (this.page > 1) {
+            this.page -= 1;
+            this.loadRows();
+          }
+        },
+        nextPage() {
+          if (this.page < this.maxPage) {
+            this.page += 1;
+            this.loadRows();
+          }
+        },
+        openAdd() {
+          if (!this.canEdit) return;
+          const row = {};
+          (this.meta.columns || []).forEach(c => { row[c.name] = ''; });
+          this.editor = { open: true, mode: 'add', row: row };
+          this.editorError = '';
+        },
+        openEdit(r) {
+          if (!this.canEdit) return;
+          const row = {};
+          (this.meta.columns || []).forEach(c => { row[c.name] = (r && r[c.name] !== undefined) ? r[c.name] : ''; });
+          this.editor = { open: true, mode: 'edit', row: row };
+          this.editorError = '';
+        },
+        closeEditor() {
+          this.editor.open = false;
+          this.editorError = '';
+        },
+        async saveEditor() {
+          if (!this.canEdit) return;
+          this.savingRow = true;
+          this.editorError = '';
+          try {
+            const r = await axios.post(`/api/db/table/${encodeURIComponent(this.selectedTable)}/row`, this.editor.row);
+            if (r.data && r.data.success) {
+              this.closeEditor();
+              await this.loadRows();
+            } else {
+              this.editorError = (r.data && r.data.message) ? r.data.message : '保存失败';
+            }
+          } catch (e) {
+            this.editorError = (e && e.message) ? e.message : '保存失败';
+          } finally {
+            this.savingRow = false;
+          }
+        },
+        async deleteRow(r) {
+          if (!this.canEdit) return;
+          const pk = this.meta.pk;
+          const pkVal = r ? r[pk] : null;
+          if (pkVal === null || pkVal === undefined || pkVal === '') return;
+          if (!confirm(`确认删除该行？(${pk}=${pkVal})`)) return;
+          try {
+            const resp = await axios.post(`/api/db/table/${encodeURIComponent(this.selectedTable)}/row/delete`, { pk_value: pkVal });
+            if (resp.data && resp.data.success) {
+              await this.loadRows();
+            } else {
+              this.error = (resp.data && resp.data.message) ? resp.data.message : '删除失败';
+            }
+          } catch (e) {
+            this.error = (e && e.message) ? e.message : '删除失败';
+          }
+        },
+        addLocalRow() {
+          this.localRows.push({ key: '', value: '' });
+        },
+        removeLocalRow(idx) {
+          this.localRows.splice(idx, 1);
+        },
+        exportLocal() {
+          this.localError = '';
+          try {
+            this.localJson = JSON.stringify(this.localRows, null, 2);
+          } catch (e) {
+            this.localError = '导出失败';
+          }
+        },
+        importLocal() {
+          this.localError = '';
+          try {
+            const obj = JSON.parse(this.localJson || '[]');
+            if (!Array.isArray(obj)) {
+              this.localError = 'JSON 必须是数组';
+              return;
+            }
+            this.localRows = obj.map(x => ({ key: (x && x.key) ? String(x.key) : '', value: (x && x.value) ? String(x.value) : '' }));
+          } catch (e) {
+            this.localError = 'JSON 解析失败';
+          }
+        },
+        resetLocal() {
+          this.localRows = [{ key: 'example', value: 'value' }];
+          this.localJson = '';
+          this.localError = '';
+        }
+      }
+    });
+  </script>
+</body>
+</html>

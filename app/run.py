@@ -83,7 +83,7 @@ print(
 / /_/ / / ___ |___/ /
 \___\_\/_/  |_/____/
 
--- Quark-Auto-Save --
+-- Cloud-Auto-Save --
  """
 )
 sys.stdout.flush()
@@ -128,6 +128,8 @@ TASK_TIMEOUT = int(os.environ.get("TASK_TIMEOUT", 1800))
 
 config_data = {}
 task_plugins_config_default = {}
+CONFIG_DB_KEY = "quark_config"
+_config_lock = threading.Lock()
 
 # 数据同步模块
 sync_db = None
@@ -259,6 +261,147 @@ def gen_md5(string):
     return md5.hexdigest()
 
 
+def _normalize_cookie_list(cookie_val):
+    if not cookie_val:
+        return []
+    if isinstance(cookie_val, str):
+        s = cookie_val.strip()
+        return [s] if s else []
+    if isinstance(cookie_val, list):
+        out = []
+        for it in cookie_val:
+            if isinstance(it, str):
+                s = it.strip()
+                if s:
+                    out.append(s)
+        return out
+    return []
+
+
+def _sanitize_config_data(data):
+    if not isinstance(data, dict):
+        data = {}
+
+    cookie_list = _normalize_cookie_list(data.get("cookie"))
+
+    accounts = data.get("accounts")
+    if not isinstance(accounts, list):
+        accounts = []
+
+    if cookie_list and not accounts:
+        accounts = []
+        for idx, ck in enumerate(cookie_list):
+            accounts.append(
+                {
+                    "name": f"夸克{idx + 1}",
+                    "drive_type": "quark",
+                    "cookie": ck,
+                    "enabled": True,
+                    "default": idx == 0,
+                }
+            )
+
+    for acc in accounts:
+        if not isinstance(acc, dict):
+            continue
+        acc.setdefault("name", "")
+        acc.setdefault("drive_type", "quark")
+        acc.setdefault("cookie", "")
+        acc.setdefault("enabled", True)
+        acc.setdefault("default", False)
+
+    data["accounts"] = accounts
+
+    if "cookie" in data:
+        data.pop("cookie", None)
+
+    return data
+
+
+def _load_config_from_db():
+    if not sync_db:
+        return None
+    try:
+        username = os.environ.get("WEBUI_USERNAME") or "admin"
+        data = sync_db.export_config_dict(username=username)
+        if data:
+            return _sanitize_config_data(data)
+    except Exception:
+        pass
+    raw = sync_db.get_app_config(CONFIG_DB_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    return _sanitize_config_data(data)
+
+
+def _save_config_to_db(data):
+    if not sync_db:
+        return False
+    if not isinstance(data, dict):
+        data = {}
+    if "webui" not in data:
+        if isinstance(config_data, dict) and isinstance(config_data.get("webui"), dict):
+            data["webui"] = config_data["webui"]
+        else:
+            data["webui"] = {"username": "admin", "password": "admin123"}
+    try:
+        if hasattr(sync_db, "import_config_dict"):
+            sync_db.import_config_dict(data)
+            try:
+                payload = json.dumps(data, ensure_ascii=False)
+                sync_db.set_app_config(CONFIG_DB_KEY, payload)
+            except Exception:
+                pass
+            return True
+    except Exception:
+        pass
+    try:
+        payload = json.dumps(data, ensure_ascii=False)
+    except Exception:
+        payload = "{}"
+    return sync_db.set_app_config(CONFIG_DB_KEY, payload)
+
+
+def _reload_config_data():
+    global config_data
+    loaded = _load_config_from_db()
+    if loaded is not None:
+        config_data = loaded
+    return config_data
+
+
+def _get_default_account_cookie(drive_type="quark"):
+    accounts = config_data.get("accounts") if isinstance(config_data, dict) else []
+    if not isinstance(accounts, list):
+        return ""
+    enabled = [a for a in accounts if isinstance(a, dict) and a.get("enabled", True) and a.get("drive_type") == drive_type]
+    if not enabled:
+        return ""
+    for a in enabled:
+        if a.get("default") or a.get("is_default"):
+            return (a.get("cookie") or "").strip()
+    return (enabled[0].get("cookie") or "").strip()
+
+
+def _export_config_to_tempfile():
+    with _config_lock:
+        cfg = _reload_config_data()
+        export_data = json.loads(json.dumps(cfg, ensure_ascii=False)) if isinstance(cfg, dict) else {}
+    config_dir = os.path.dirname(os.path.realpath(CONFIG_PATH))
+    try:
+        os.makedirs(config_dir, exist_ok=True)
+    except Exception:
+        pass
+    tmp_name = f".quark_config.export.{int(time.time() * 1000)}.json"
+    export_path = os.path.join(config_dir, tmp_name)
+    Config.write_json(export_path, export_data)
+    return export_path
+
+
 def get_login_token():
     username = config_data["webui"]["username"]
     password = config_data["webui"]["password"]
@@ -276,7 +419,6 @@ def is_login():
 def get_account_by_name(account_name=None):
     """
     根据账户名称获取对应的适配器或 Quark 实例
-    支持新格式(accounts数组)和旧格式(cookie数组)的兼容
     
     Args:
         account_name: 账户名称，None 或 'auto' 表示使用默认账户
@@ -284,50 +426,42 @@ def get_account_by_name(account_name=None):
     Returns:
         tuple: (adapter/quark实例, drive_type)
     """
-    # 检查是否使用新格式配置
-    if MULTI_DRIVE_SUPPORT and config_data.get("accounts"):
-        accounts = config_data.get("accounts", [])
-        enabled_accounts = [acc for acc in accounts if acc.get("enabled", True)]
-        
-        if not enabled_accounts:
-            # 无可用账户，回退到旧格式（通过工厂缓存复用实例）
-            if config_data.get("cookie"):
-                return AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0), "quark"
-            return None, None
-        
-        # 查找指定账户或默认账户
-        target_account = None
-        if account_name and account_name != "auto":
-            for acc in enabled_accounts:
-                if acc.get("name") == account_name:
-                    target_account = acc
-                    break
-        
+    accounts = config_data.get("accounts", []) if isinstance(config_data, dict) else []
+    if not isinstance(accounts, list):
+        accounts = []
+    enabled_accounts = [acc for acc in accounts if isinstance(acc, dict) and acc.get("enabled", True)]
+    if not enabled_accounts:
+        return None, None
+
+    target_account = None
+    if account_name and account_name != "auto":
+        for acc in enabled_accounts:
+            if acc.get("name") == account_name:
+                target_account = acc
+                break
+
+    if not target_account:
+        for acc in enabled_accounts:
+            if acc.get("is_default") or acc.get("default"):
+                target_account = acc
+                break
         if not target_account:
-            # 使用默认账户或第一个可用账户
-            for acc in enabled_accounts:
-                if acc.get("is_default") or acc.get("default"):
-                    target_account = acc
-                    break
-            if not target_account:
-                target_account = enabled_accounts[0]
-        
-        # 创建适配器
-        drive_type = target_account.get("drive_type", "quark")
-        cookie = target_account.get("cookie", "")
-        
-        # 使用工厂创建适配器
+            target_account = enabled_accounts[0]
+
+    drive_type = target_account.get("drive_type", "quark")
+    cookie = (target_account.get("cookie") or "").strip()
+
+    if MULTI_DRIVE_SUPPORT:
         adapter = AdapterFactory.create_adapter(drive_type, cookie, 0)
         if adapter:
             return adapter, drive_type
-        
-        # 工厂创建失败，回退到默认（通过工厂缓存复用实例）
-        return AdapterFactory.create_adapter("quark", cookie, 0), "quark"
-    
-    # 旧格式兼容（通过工厂缓存复用实例）
-    if config_data.get("cookie"):
-        return AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0), "quark"
-    
+        if drive_type != "quark":
+            return None, None
+        fallback = AdapterFactory.create_adapter("quark", cookie, 0)
+        return (fallback, "quark") if fallback else (None, None)
+
+    if drive_type == "quark" and cookie:
+        return Quark(cookie), "quark"
     return None, None
 
 
@@ -342,9 +476,8 @@ def get_adapter_for_url(shareurl):
         tuple: (adapter/quark实例, drive_type)
     """
     if not MULTI_DRIVE_SUPPORT:
-        if config_data.get("cookie"):
-            return AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0), "quark"
-        return None, None
+        ck = _get_default_account_cookie("quark")
+        return (Quark(ck), "quark") if ck else (None, None)
     
     # 根据 URL 判断网盘类型
     drive_type = AdapterFactory.get_drive_type_by_url(shareurl)
@@ -352,9 +485,6 @@ def get_adapter_for_url(shareurl):
     
     if not drive_type:
         logging.warning(f">>> 无法识别的分享链接类型: {shareurl}")
-        # 尝试回退到旧格式的夸克
-        if config_data.get("cookie"):
-            return AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0), "quark"
         return None, None
     
     # 从账户中查找对应类型的可用账户
@@ -374,10 +504,6 @@ def get_adapter_for_url(shareurl):
                     return adapter, drive_type
     
     # 回退到旧格式
-    if drive_type == "quark" and config_data.get("cookie"):
-        logging.info(f">>> 回退到旧格式Cookie配置")
-        return AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0), "quark"
-    
     logging.warning(f">>> 未找到 {drive_type} 类型的可用账户")
     return None, None
 
@@ -432,13 +558,151 @@ def index():
     )
 
 
+@app.route("/db-console")
+def db_console():
+    if not is_login():
+        return redirect(url_for("login"))
+    return render_template("db_console.html", version=app.config["APP_VERSION"])
+
+
+@app.route("/api/db/info")
+def db_info():
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据库未初始化"})
+    try:
+        r = sync_db.execute_sql(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name ASC"
+        )
+        tables = [row.get("name") for row in (r.get("rows") or [])] if r.get("ok") else []
+        keys = sync_db.list_app_config_keys()
+        return jsonify(
+            {
+                "success": True,
+                "data": {
+                    "db_path": getattr(sync_db, "db_path", ""),
+                    "tables": tables,
+                    "app_config_keys": keys,
+                },
+            }
+        )
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/db/exec", methods=["POST"])
+def db_exec():
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据库未初始化"})
+    sql_text = (request.json or {}).get("sql", "")
+    result = sync_db.execute_sql(sql_text)
+    if result.get("ok"):
+        return jsonify({"success": True, "data": result})
+    return jsonify({"success": False, "message": result.get("error", "执行失败")})
+
+
+@app.route("/api/db/tables")
+def db_tables():
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据库未初始化"})
+    try:
+        return jsonify({"success": True, "data": {"tables": sync_db.list_tables()}})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/db/table/<table_name>/meta")
+def db_table_meta(table_name):
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据库未初始化"})
+    try:
+        meta = sync_db.get_table_meta(table_name)
+        if not meta.get("columns"):
+            return jsonify({"success": False, "message": "表不存在或不可访问"})
+        return jsonify({"success": True, "data": meta})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/db/table/<table_name>/rows")
+def db_table_rows(table_name):
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据库未初始化"})
+    page = request.args.get("page", "1")
+    page_size = request.args.get("page_size", "50")
+    include_deleted = request.args.get("include_deleted", "0") == "1"
+    order_by = request.args.get("order_by")
+    order_dir = request.args.get("order_dir", "DESC")
+    q = request.args.get("q")
+    try:
+        data = sync_db.get_table_rows(
+            table_name,
+            page=int(page),
+            page_size=int(page_size),
+            include_deleted=include_deleted,
+            order_by=order_by,
+            order_dir=order_dir,
+            q=q,
+        )
+        if not data.get("ok"):
+            return jsonify({"success": False, "message": data.get("error", "查询失败")})
+        return jsonify({"success": True, "data": data})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/db/table/<table_name>/row", methods=["POST"])
+def db_table_upsert_row(table_name):
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据库未初始化"})
+    row_data = request.json or {}
+    try:
+        r = sync_db.upsert_table_row(table_name, row_data)
+        if r.get("ok"):
+            return jsonify({"success": True, "data": r})
+        return jsonify({"success": False, "message": r.get("error", "保存失败")})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/db/table/<table_name>/row/delete", methods=["POST"])
+def db_table_delete_row(table_name):
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not sync_db:
+        return jsonify({"success": False, "message": "数据库未初始化"})
+    pk_value = (request.json or {}).get("pk_value")
+    if pk_value is None or pk_value == "":
+        return jsonify({"success": False, "message": "缺少主键值"})
+    try:
+        r = sync_db.delete_table_row(table_name, pk_value)
+        if r.get("ok"):
+            return jsonify({"success": True, "data": r})
+        return jsonify({"success": False, "message": r.get("error", "删除失败")})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
 # 获取配置数据
 @app.route("/data")
 def get_data():
     if not is_login():
         return jsonify({"success": False, "message": "未登录"})
-    data = Config.read_json(CONFIG_PATH)
-    del data["webui"]
+    with _config_lock:
+        cfg = _reload_config_data()
+        data = json.loads(json.dumps(cfg, ensure_ascii=False)) if isinstance(cfg, dict) else {}
+    data.pop("webui", None)
     data["api_token"] = get_login_token()
     data["task_plugins_config_default"] = task_plugins_config_default
     # 添加多网盘支持标识
@@ -452,12 +716,13 @@ def get_data():
 # 更新数据
 @app.route("/update", methods=["POST"])
 def update():
-    global config_data,CONFIG_PATH
+    global config_data
     if not is_login():
         return jsonify({"success": False, "message": "未登录"})
-    config_data = Config.read_json(CONFIG_PATH)
+    with _config_lock:
+        config_data = _reload_config_data()
 
-    dont_save_keys = ["task_plugins_config_default", "api_token", "sync_tasks"]
+    dont_save_keys = ["task_plugins_config_default", "api_token", "sync_tasks", "cookie"]
     
     # 处理阿里云盘/迅雷网盘 refresh_token 保护
     # 对于这两种网盘类型，一旦配置了 cookie，就只能通过专门的刷新接口更新
@@ -494,7 +759,9 @@ def update():
     for key, value in request.json.items():
         if key not in dont_save_keys:
             config_data.update({key: value})
-    Config.write_json(CONFIG_PATH, config_data)
+    config_data = _sanitize_config_data(config_data)
+    with _config_lock:
+        _save_config_to_db(config_data)
     # 配置变更时清空适配器实例缓存，确保新配置生效
     if MULTI_DRIVE_SUPPORT:
         AdapterFactory.clear_cache()
@@ -514,27 +781,33 @@ def run_script_now():
     if not is_login():
         return jsonify({"success": False, "message": "未登录"})
     tasklist = request.json.get("tasklist", [])
-    command = [PYTHON_PATH, "-u", SCRIPT_PATH, CONFIG_PATH]
     logging.info(
         f">>> 手动运行任务 [{tasklist[0].get('taskname') if len(tasklist)>0 else 'ALL'}] 开始执行..."
     )
 
     def generate_output():
         run_id = f"manual_{int(time.time() * 1000)}"
+        export_path = None
+        try:
+            export_path = _export_config_to_tempfile()
+        except Exception:
+            export_path = None
 
         # 设置环境变量
         process_env = os.environ.copy()
         process_env["PYTHONIOENCODING"] = "utf-8"
         if request.json.get("quark_test"):
             process_env["QUARK_TEST"] = "true"
-            process_env["COOKIE"] = json.dumps(
-                request.json.get("cookie", []), ensure_ascii=False
-            )
-            process_env["PUSH_CONFIG"] = json.dumps(
-                request.json.get("push_config", {}), ensure_ascii=False
-            )
+            ck = _get_default_account_cookie("quark")
+            cookies = [ck] if ck else []
+            process_env["COOKIE"] = json.dumps(cookies, ensure_ascii=False)
+            push_cfg = request.json.get("push_config")
+            if push_cfg is None:
+                push_cfg = config_data.get("push_config", {})
+            process_env["PUSH_CONFIG"] = json.dumps(push_cfg, ensure_ascii=False)
         if tasklist:
             process_env["TASKLIST"] = json.dumps(tasklist, ensure_ascii=False)
+        command = [PYTHON_PATH, "-u", SCRIPT_PATH, export_path or CONFIG_PATH]
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -578,6 +851,11 @@ def run_script_now():
                         process.kill()
                     except Exception:
                         pass
+            if export_path and os.path.exists(export_path):
+                try:
+                    os.remove(export_path)
+                except Exception:
+                    pass
 
     return Response(
         stream_with_context(generate_output()),
@@ -623,7 +901,8 @@ def get_task_suggestions():
             if search.get("success"):
                 if search.get("new_token"):
                     cs_data["token"] = search.get("new_token")
-                    Config.write_json(CONFIG_PATH, config_data)
+                    with _config_lock:
+                        _save_config_to_db(_sanitize_config_data(config_data))
                 search_results = cs.clean_search_results(search.get("data"))
                 return search_results
         return []
@@ -710,8 +989,11 @@ def get_share_detail():
             if not preview_account:
                 preview_account = account
             if not preview_account:
-                if config_data.get("cookie"):
-                    preview_account = AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0)
+                ck = _get_default_account_cookie("quark")
+                if ck and MULTI_DRIVE_SUPPORT:
+                    preview_account = AdapterFactory.create_adapter("quark", ck, 0)
+                elif ck:
+                    preview_account = Quark(ck)
         
         # ── 定义两个并行任务 ──
         def fetch_share_data():
@@ -842,8 +1124,11 @@ def _apply_preview_regex(data, task, magic_regex, dir_file_list, preview_account
         if not preview_account and share_account:
             preview_account = share_account
         if not preview_account:
-            if config_data.get("cookie"):
-                preview_account = AdapterFactory.create_adapter("quark", config_data["cookie"][0], 0)
+            ck = _get_default_account_cookie("quark")
+            if ck and MULTI_DRIVE_SUPPORT:
+                preview_account = AdapterFactory.create_adapter("quark", ck, 0)
+            elif ck:
+                preview_account = Quark(ck)
             else:
                 logger.warning(f"[preview_regex] 未配置任何账户，跳过预览")
                 return
@@ -1130,6 +1415,8 @@ def aliyun_token_refresh():
     account_name = request.json.get("account_name", "")
     
     # 查找对应的账户
+    with _config_lock:
+        config_data = _reload_config_data()
     accounts = config_data.get("accounts", [])
     target_account = None
     for acc in accounts:
@@ -1152,7 +1439,8 @@ def aliyun_token_refresh():
             if new_token and new_token != target_account.get("cookie", ""):
                 # 更新配置
                 target_account["cookie"] = new_token
-                Config.write_json(CONFIG_PATH, config_data)
+                with _config_lock:
+                    _save_config_to_db(_sanitize_config_data(config_data))
                 # 清除适配器缓存
                 AdapterFactory.clear_cache()
                 invalidate_all()  # 同步清空应用级预览缓存
@@ -1185,6 +1473,8 @@ def xunlei_token_refresh():
     account_name = request.json.get("account_name", "")
 
     # 查找对应的账户
+    with _config_lock:
+        config_data = _reload_config_data()
     accounts = config_data.get("accounts", [])
     target_account = None
     for acc in accounts:
@@ -1206,7 +1496,8 @@ def xunlei_token_refresh():
             if new_token and new_token != target_account.get("cookie", ""):
                 target_account["cookie"] = new_token
                 target_account["_token_updated_at"] = time.time()
-                Config.write_json(CONFIG_PATH, config_data)
+                with _config_lock:
+                    _save_config_to_db(_sanitize_config_data(config_data))
                 AdapterFactory.clear_cache()
                 invalidate_all()  # 同步清空应用级预览缓存
 
@@ -1245,6 +1536,8 @@ def update_account_token():
     if drive_type not in ("aliyun", "xunlei"):
         return jsonify({"success": False, "message": "仅支持阿里云盘和迅雷网盘的 Token 更新"})
 
+    with _config_lock:
+        config_data = _reload_config_data()
     accounts = config_data.get("accounts", [])
     target_account = None
     for acc in accounts:
@@ -1257,10 +1550,10 @@ def update_account_token():
         return jsonify({"success": False, "message": f"未找到对应的{drive_type}账户"})
 
     try:
-        old_token = target_account.get("cookie", "")
         target_account["cookie"] = new_token
         target_account["_token_updated_at"] = time.time()
-        Config.write_json(CONFIG_PATH, config_data)
+        with _config_lock:
+            _save_config_to_db(_sanitize_config_data(config_data))
         # 清除适配器缓存
         AdapterFactory.clear_cache()
         invalidate_all()  # 同步清空应用级预览缓存
@@ -1292,8 +1585,10 @@ def add_task():
     if not request_data.get("addition"):
         request_data["addition"] = task_plugins_config_default
     # 添加任务
-    config_data["tasklist"].append(request_data)
-    Config.write_json(CONFIG_PATH, config_data)
+    with _config_lock:
+        config_data = _reload_config_data()
+        config_data.setdefault("tasklist", []).append(request_data)
+        _save_config_to_db(_sanitize_config_data(config_data))
     logging.info(f">>> 通过API添加任务: {request_data['taskname']}")
     return jsonify(
         {"success": True, "code": 0, "message": "任务添加成功", "data": request_data}
@@ -1343,8 +1638,11 @@ def save_sync_tasks():
         return jsonify({"success": False, "message": "未登录"})
     try:
         sync_tasks = request.json.get("sync_tasks", [])
-        config_data["sync_tasks"] = sync_tasks
-        Config.write_json(CONFIG_PATH, config_data)
+        global config_data
+        with _config_lock:
+            config_data = _reload_config_data()
+            config_data["sync_tasks"] = sync_tasks
+            _save_config_to_db(_sanitize_config_data(config_data))
         # 重载同步调度
         if sync_manager:
             sync_manager.reload_sync_tasks(sync_tasks)
@@ -1807,7 +2105,12 @@ def run_python(script_path, config_path):
 
     process_env = os.environ.copy()
     process_env["PYTHONIOENCODING"] = "utf-8"
-    command = [PYTHON_PATH, "-u", script_path, config_path]
+    export_path = None
+    try:
+        export_path = _export_config_to_tempfile()
+    except Exception:
+        export_path = None
+    command = [PYTHON_PATH, "-u", script_path, export_path or config_path]
     process = None
     try:
         process = subprocess.Popen(
@@ -1861,6 +2164,11 @@ def run_python(script_path, config_path):
         if process and process.stdout:
             try:
                 process.stdout.close()
+            except Exception:
+                pass
+        if export_path and os.path.exists(export_path):
+            try:
+                os.remove(export_path)
             except Exception:
                 pass
         logging.debug(f">>> run_python 函数执行完成")
@@ -1923,20 +2231,37 @@ def stop_scheduler_run():
 
 
 def init():
-    global config_data, task_plugins_config_default
+    global config_data, task_plugins_config_default, sync_db, sync_manager
     logging.info(">>> 初始化配置")
-    # 检查配置文件是否存在
-    if not os.path.exists(CONFIG_PATH):
-        if not os.path.exists(os.path.dirname(CONFIG_PATH)):
-            os.makedirs(os.path.dirname(CONFIG_PATH))
-        with open("quark_config.json", "rb") as src, open(CONFIG_PATH, "wb") as dest:
-            dest.write(src.read())
+    config_dir = os.path.dirname(os.path.realpath(CONFIG_PATH))
+    try:
+        os.makedirs(config_dir, exist_ok=True)
+    except Exception:
+        pass
 
-    # 读取配置
-    config_data = Config.read_json(CONFIG_PATH)
-    Config.breaking_change_update(config_data)
-    if not config_data.get("magic_regex"):
-        config_data["magic_regex"] = MagicRename().magic_regex
+    try:
+        from sync import SyncDB, SyncSchedulerManager
+        db_path = os.path.join(config_dir, "sync_records.db")
+        sync_db = SyncDB(db_path)
+        sync_db.cleanup_stale_locks()
+    except Exception as e:
+        sync_db = None
+        sync_manager = None
+        logging.warning(f">>> 初始化数据同步模块失败: {e}")
+
+    with _config_lock:
+        config_data = _load_config_from_db()
+        if config_data is None:
+            if os.path.exists(CONFIG_PATH):
+                config_data = Config.read_json(CONFIG_PATH)
+            elif os.path.exists("quark_config.json"):
+                config_data = Config.read_json("quark_config.json")
+            else:
+                config_data = {}
+            config_data = _sanitize_config_data(config_data)
+        Config.breaking_change_update(config_data)
+        if not config_data.get("magic_regex"):
+            config_data["magic_regex"] = MagicRename().magic_regex
 
     # 默认管理账号
     config_data["webui"] = {
@@ -1961,14 +2286,46 @@ def init():
             )
     config_data["plugins"] = plugins_config_default
 
-    # 更新配置
-    Config.write_json(CONFIG_PATH, config_data)
+    config_data = _sanitize_config_data(config_data)
+    with _config_lock:
+        _save_config_to_db(config_data)
+        config_data = _reload_config_data()
     
     # 初始化阿里云盘 token 保存器
     if MULTI_DRIVE_SUPPORT:
+        def _make_token_saver(drive_type):
+            def _saver(new_token, account_name=None):
+                global config_data
+                updated = False
+                now = time.time()
+                with _config_lock:
+                    cfg = _reload_config_data()
+                    accounts = cfg.get("accounts", []) if isinstance(cfg, dict) else []
+                    for acc in accounts:
+                        if not isinstance(acc, dict):
+                            continue
+                        if acc.get("drive_type") != drive_type:
+                            continue
+                        if account_name and acc.get("name") != account_name:
+                            continue
+                        acc["cookie"] = new_token
+                        acc["_token_updated_at"] = now
+                        updated = True
+                        if account_name:
+                            break
+                    if updated:
+                        cfg["accounts"] = accounts
+                        cfg = _sanitize_config_data(cfg)
+                        _save_config_to_db(cfg)
+                        config_data = cfg
+                if updated and MULTI_DRIVE_SUPPORT:
+                    AdapterFactory.clear_cache()
+                    invalidate_all()
+                return updated
+            return _saver
         try:
             from adapters.aliyun_adapter import set_config_saver
-            set_config_saver(CONFIG_PATH)
+            set_config_saver(_make_token_saver("aliyun"))
             logging.info(">>> 阿里云盘 token 保存器已初始化")
         except Exception as e:
             logging.warning(f">>> 初始化阿里云盘 token 保存器失败: {e}")
@@ -1977,34 +2334,30 @@ def init():
     if MULTI_DRIVE_SUPPORT:
         try:
             from adapters.xunlei_adapter import set_config_saver as xunlei_set_config_saver
-            xunlei_set_config_saver(CONFIG_PATH)
+            xunlei_set_config_saver(_make_token_saver("xunlei"))
             logging.info(">>> 迅雷网盘 token 保存器已初始化")
         except Exception as e:
             logging.warning(f">>> 初始化迅雷网盘 token 保存器失败: {e}")
 
-    # 初始化数据同步模块
-    global sync_db, sync_manager
-    try:
-        from sync import SyncDB, SyncSchedulerManager
-        db_path = os.path.join(os.path.dirname(CONFIG_PATH), "sync_records.db")
-        sync_db = SyncDB(db_path)
-        sync_db.cleanup_stale_locks()
-        datafiles_abs = os.path.realpath(DATAFILES_DIR)
-        if not os.path.exists(datafiles_abs):
-            os.makedirs(datafiles_abs)
-        sync_manager = SyncSchedulerManager(
-            scheduler=scheduler,
-            db=sync_db,
-            base_dir=datafiles_abs,
-            config_getter=lambda: config_data,
-            cancel_events=_cancel_events,
-            cancel_events_lock=_cancel_events_lock,
-        )
-        logging.info(f">>> 数据同步模块已初始化 (datafiles={datafiles_abs})")
-    except Exception as e:
-        logging.warning(f">>> 初始化数据同步模块失败: {e}")
-        import traceback
-        traceback.print_exc()
+    if sync_db:
+        try:
+            from sync import SyncSchedulerManager
+            datafiles_abs = os.path.realpath(DATAFILES_DIR)
+            if not os.path.exists(datafiles_abs):
+                os.makedirs(datafiles_abs)
+            sync_manager = SyncSchedulerManager(
+                scheduler=scheduler,
+                db=sync_db,
+                base_dir=datafiles_abs,
+                config_getter=lambda: config_data,
+                cancel_events=_cancel_events,
+                cancel_events_lock=_cancel_events_lock,
+            )
+            logging.info(f">>> 数据同步模块已初始化 (datafiles={datafiles_abs})")
+        except Exception as e:
+            logging.warning(f">>> 初始化数据同步模块失败: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 if __name__ == "__main__":

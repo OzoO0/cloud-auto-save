@@ -42,29 +42,6 @@
 
           <div v-if="activeTab === 'config'">
 
-            <!-- Cookie Card -->
-            <div class="config-card">
-              <div class="config-card-header">
-                <div class="card-title">
-                  <i class="bi bi-cookie"></i>
-                  <h2>Cookie</h2>
-                </div>
-                <div class="card-actions">
-                  <button type="button" class="btn btn-outline-primary btn-sm" @click="addCookie()"><i class="bi bi-plus"></i></button>
-                </div>
-              </div>
-              <div class="config-card-body">
-                <p>1. 所有账号执行签到，纯<a href="https://github.com/Cp0204/quark-auto-save/wiki/使用技巧集锦#每日签到领空间">签到</a>只需移动端参数即可！</p>
-                <p>2. 仅第一个账号执行转存，请自行确认顺序。<b>最好是手机验证码<a target="_blank" href="https://pan.quark.cn/">登录</a>，CK比较完整！</b>如需签到参数附在CK后面。</p>
-                <div v-for="(value, index) in formData.cookie" :key="index" class="input-group mb-2">
-                  <input type="text" v-model="formData.cookie[index]" class="form-control" placeholder="打开 pan.quark.com 按 F12 抓取">
-                  <div class="input-group-append">
-                    <button type="button" class="btn btn-outline-danger btn-sm" @click="removeCookie(index)"><i class="bi bi-dash"></i></button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
             <!-- 多网盘账户 Card -->
             <div class="config-card">
               <div class="config-card-header">
@@ -77,10 +54,11 @@
                 </div>
               </div>
               <div class="config-card-body">
+                <p>1. 所有账号执行签到，纯<a href="https://github.com/Cp0204/quark-auto-save/wiki/使用技巧集锦#每日签到领空间">签到</a>只需移动端参数即可！</p>
                 <p>配置多个网盘账户，支持夸克、115等网盘的自动转存</p>
                 <div v-if="formData.accounts && formData.accounts.length === 0" class="alert alert-info">
                   <i class="bi bi-info-circle"></i> 暂无多网盘账户配置。如需使用多网盘功能，请点击 + 添加账户。
-                  <br><small>提示：如果只使用夸克网盘，可以继续使用上方的 Cookie 配置，无需配置此项。</small>
+                  <br><small>提示：至少添加一个启用的账户，并设置为默认账户。</small>
                 </div>
                 <div v-for="(account, index) in formData.accounts" :key="'account_'+index" class="card mb-2">
                   <div class="card-body p-2">
@@ -384,7 +362,7 @@
             </div>
 
             <!-- Task Cards -->
-            <div v-for="(task, index) in formData.tasklist" :key="index">
+            <div v-for="(task, index) in formData.tasklist" :key="task.task_uid || index">
               <template v-if="filterTask(task)">
                 <div class="task-card">
                   <div class="task-card-header" data-toggle="collapse" :data-target="'#collapse_'+index" aria-expanded="false" :aria-controls="'collapse_'+index">
@@ -480,14 +458,14 @@
                     <label class="col-sm-2 col-form-label"><i class="bi bi-person-badge"></i> 使用账户</label>
                     <div class="col-sm-10">
                       <div class="input-group">
-                        <input type="text" class="form-control" value="默认（使用Cookie配置）" disabled>
+                        <input type="text" class="form-control" value="未配置账户（请前往系统配置添加）" disabled>
                         <div class="input-group-append">
                           <button type="button" class="btn btn-outline-primary" @click="changeTab('config')" title="前往配置多网盘账户">
                             <i class="bi bi-gear"></i> 配置账户
                           </button>
                         </div>
                       </div>
-                      <small class="form-text text-muted">如需使用115网盘等多网盘功能，请先在「系统配置」中添加多网盘账户</small>
+                      <small class="form-text text-muted">请先在「系统配置」中添加并启用至少一个账户</small>
                     </div>
                   </div>
                   <div class="form-group row">
@@ -1387,7 +1365,6 @@
           { value: 'uc', label: 'UC网盘', icon: 'bi-folder' }
         ],
         formData: {
-          cookie: [],
           accounts: [],  // 多网盘账户配置
           push_config: {},
           media_servers: {},
@@ -1817,9 +1794,6 @@
           axios.get('/data')
             .then(response => {
               config_data = response.data.data
-              // cookie兼容
-              if (typeof config_data.cookie === 'string')
-                config_data.cookie = [config_data.cookie];
               // 添加星期预设
               config_data.tasklist = config_data.tasklist.map(task => {
                 if (!task.hasOwnProperty('runweek')) {
@@ -1866,10 +1840,13 @@
                   acc._tokenSaved = true;
                 }
               });
-              // 确保任务有account_name字段
+              // 确保任务有 account_name / task_uid 字段
               config_data.tasklist = config_data.tasklist.map(task => {
                 if (!task.hasOwnProperty('account_name')) {
                   task.account_name = "";
+                }
+                if (!task.task_uid) {
+                  task.task_uid = this.generateUUID();
                 }
                 return task;
               });
@@ -1921,13 +1898,6 @@
             .catch(error => {
               console.error('Error saving config:', error);
             });
-        },
-        addCookie() {
-          this.formData.cookie.push("");
-        },
-        removeCookie(index) {
-          if (this.formData.cookie[index] == "" || confirm("确认删除吗？"))
-            this.formData.cookie.splice(index, 1);
         },
         // 多网盘账户管理方法
         addAccount() {
@@ -1996,8 +1966,18 @@
           if (confirm("确认删除吗？"))
             this.$delete(this.formData.push_config, key);
         },
+        generateUUID() {
+          if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+          }
+          return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+          });
+        },
         addTask() {
           newTask = { ...this.newTask }
+          newTask.task_uid = this.generateUUID();
           newTask.taskname = this.taskNameFilter;
           if (this.formData.tasklist.length > 0) {
             lastTask = this.formData.tasklist[this.formData.tasklist.length - 1];
@@ -2090,9 +2070,7 @@
           body = {};
           if (test) {
             body = {
-              "quark_test": true,
-              "cookie": this.formData.cookie,
-              "push_config": this.formData.push_config
+              "quark_test": true
             };
           } else if (task_index != null) {
             task = { ...this.formData.tasklist[task_index] };
