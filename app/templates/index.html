@@ -560,6 +560,31 @@
                       <v-jsoneditor v-model="task.addition" :options="{mode:'tree'}" :plus="false" height="180px"></v-jsoneditor>
                     </div>
                   </div>
+                  <!-- 关联同步任务配置 -->
+                  <div class="form-group row" v-if="syncTasks.length > 0 && task.sync_task_config">
+                    <label class="col-sm-2 col-form-label">关联同步任务</label>
+                    <div class="col-sm-10 col-form-label">
+                      <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" v-model="task.sync_task_config.enable" :id="'sync_link_'+index">
+                        <label class="form-check-label" :for="'sync_link_'+index">启用关联</label>
+                      </div>
+                      <div v-if="task.sync_task_config.enable" class="ml-4">
+                        <div class="form-group mb-2">
+                          <label class="small">选择同步任务</label>
+                          <select class="form-control form-control-sm" v-model="task.sync_task_config.sync_task_id">
+                            <option value="">-- 请选择 --</option>
+                            <option v-for="st in syncTasks" :key="st.task_id" :value="st.task_id" :disabled="st.enabled === false">
+                              {{ st.taskname || st.task_id }} {{ st.enabled === false ? '(已禁用)' : '' }}
+                            </option>
+                          </select>
+                        </div>
+                        <div class="form-group mb-2">
+                          <label class="small">延迟触发（秒）</label>
+                          <input type="number" class="form-control form-control-sm" v-model.number="task.sync_task_config.delay_seconds" min="0" placeholder="0 表示立即触发">
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                     </div>
                   </div>
                 </div>
@@ -1394,6 +1419,11 @@
           replace: "",
           enddate: "",
           addition: {},
+          sync_task_config: {
+            enable: false,
+            sync_task_id: "",
+            delay_seconds: 0
+          },
           ignore_extension: false,
           runweek: [1, 2, 3, 4, 5, 6, 7],
           account_name: ""  // 指定使用的账户
@@ -1848,9 +1878,19 @@
                 if (!task.task_uid) {
                   task.task_uid = this.generateUUID();
                 }
+                // 确保 sync_task_config 字段存在
+                if (!task.sync_task_config) {
+                  task.sync_task_config = {
+                    enable: false,
+                    sync_task_id: "",
+                    delay_seconds: 0
+                  };
+                }
                 return task;
               });
               this.formData = config_data;
+              // 同时获取同步任务列表（用于任务关联同步任务配置）
+              this.fetchSyncTasks();
               setTimeout(() => {
                 this.configModified = false;
               }, 100);

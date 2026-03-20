@@ -402,6 +402,117 @@ def _export_config_to_tempfile():
     return export_path
 
 
+def _handle_linked_sync_tasks(tasklist, run_id=None):
+    """
+    处理转存任务完成后的关联同步任务触发
+
+    Args:
+        tasklist: 转存任务列表
+        run_id: 执行批次标识
+    """
+    if not tasklist:
+        return
+
+    # 收集所有启用了关联的同步任务配置
+    sync_configs = []
+    for task in tasklist:
+        sync_cfg = task.get("sync_task_config")
+        if not sync_cfg:
+            continue
+        # 检查是否启用（类似插件的 enable 判断逻辑）
+        if not sync_cfg.get("enable"):
+            continue
+        sync_task_id = sync_cfg.get("sync_task_id")
+        if not sync_task_id:
+            continue
+        sync_configs.append({
+            "sync_task_id": sync_task_id,
+            "delay_seconds": sync_cfg.get("delay_seconds", 0)
+        })
+
+    if sync_configs:
+        _trigger_linked_sync_tasks(sync_configs, run_id)
+
+
+def _trigger_linked_sync_tasks(sync_configs, run_id=None):
+    """
+    触发关联的同步任务
+
+    Args:
+        sync_configs: [{'sync_task_id': 'xxx', 'delay_seconds': 0}, ...]
+        run_id: 批量执行时的批次标识（用于日志区分）
+    """
+    if not sync_configs or not sync_manager:
+        return
+
+    # 1. 去重：根据 sync_task_id 去重
+    unique_task_map = {}  # {sync_task_id: delay_seconds} - 保留最小的 delay_seconds
+    for cfg in sync_configs:
+        task_id = cfg.get("sync_task_id")
+        if not task_id:
+            continue
+        delay = cfg.get("delay_seconds", 0)
+        delay = max(0, int(delay) if delay else 0)
+        if task_id not in unique_task_map or delay < unique_task_map[task_id]:
+            unique_task_map[task_id] = delay
+
+    if not unique_task_map:
+        return
+
+    # 2. 获取同步任务配置
+    sync_tasks = config_data.get("sync_tasks", [])
+    task_map = {t.get("task_id"): t for t in sync_tasks if t.get("task_id")}
+
+    # 3. 按 delay_seconds 分组
+    from collections import defaultdict
+    delay_groups = defaultdict(list)
+    for task_id, delay in unique_task_map.items():
+        if task_id in task_map:
+            delay_groups[delay].append(task_id)
+
+    # 4. 调度触发
+    for delay, task_ids in delay_groups.items():
+        if delay > 0:
+            # 延迟触发
+            threading.Timer(delay, _execute_linked_sync_tasks,
+                          args=(task_ids, run_id)).start()
+            logger.info(f"[关联同步] 已安排 {len(task_ids)} 个任务在 {delay} 秒后执行")
+        else:
+            # 立即触发
+            _execute_linked_sync_tasks(task_ids, run_id)
+
+
+def _execute_linked_sync_tasks(task_ids, run_id=None):
+    """执行关联的同步任务"""
+    if not task_ids or not sync_manager:
+        return
+
+    sync_tasks = config_data.get("sync_tasks", [])
+    task_map = {t.get("task_id"): t for t in sync_tasks if t.get("task_id")}
+
+    for task_id in task_ids:
+        task_config = task_map.get(task_id)
+        if not task_config:
+            logger.warning(f"[关联同步] 未找到同步任务: {task_id}")
+            continue
+
+        # 检查任务是否启用
+        if not task_config.get("enabled", True):
+            logger.info(f"[关联同步] 同步任务已禁用，跳过: {task_config.get('taskname', task_id)}")
+            continue
+
+        try:
+            task_config = dict(task_config)
+            task_config["_trigger"] = "linked"
+            if run_id:
+                task_config["_run_id"] = run_id
+
+            sync_manager.run_task_now_async(task_config)
+            logger.info(f"[关联同步] 已触发同步任务: {task_config.get('taskname', task_id)}")
+        except Exception as e:
+            logger.error(f"[关联同步] 触发同步任务失败 [{task_id}]: {e}")
+
+
 def get_login_token():
     username = config_data["webui"]["username"]
     password = config_data["webui"]["password"]
@@ -851,6 +962,10 @@ def run_script_now():
                         process.kill()
                     except Exception:
                         pass
+
+            # 脚本执行完成后，触发关联的同步任务
+            _handle_linked_sync_tasks(tasklist, run_id)
+
             if export_path and os.path.exists(export_path):
                 try:
                     os.remove(export_path)
