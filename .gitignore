@@ -12,3 +12,4 @@ datafiles/*
 nul
 .trae
 tests/*
+scripts/*

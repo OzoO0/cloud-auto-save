@@ -172,5 +172,6 @@ docker run -d \
 | `plex.py`           | 自动刷新 Plex 媒体库      | [zhazhayu](https://github.com/zhazhayu) |
 | `alist_strm_gen.py` | 自动生成 strm 文件        | [xiaoQQya](https://github.com/xiaoQQya) |
 | `alist_sync.py`     | 调用 alist 实现跨网盘转存 | [jenfonro](https://github.com/jenfonro) |
+| `openlist.py`       | OpenList 通用列表与刷新   | —                                       |
 
 欢迎贡献你的插件！提交 PR 前请确保插件包含必要的 `default_config` 和注释。
