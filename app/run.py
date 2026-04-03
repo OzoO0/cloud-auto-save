@@ -32,6 +32,7 @@ import sys
 import os
 import re
 import time
+import urllib.parse
 
 # 导入日志工具
 try:
@@ -1064,6 +1065,11 @@ def get_share_detail():
         return jsonify({"success": False, "message": "未登录"})
     
     try:
+        def _mask_share_secret(v: str) -> str:
+            if not v:
+                return ""
+            return "***" if len(v) <= 6 else f"{v[:2]}***{v[-2:]}"
+
         # 提前提取所有请求参数（避免子线程访问 Flask request 上下文）
         shareurl = request.json.get("shareurl", "")
         stoken = request.json.get("stoken", "")
@@ -1072,6 +1078,15 @@ def get_share_detail():
         magic_regex = request.json.get("magic_regex", {})
         
         logger.debug(f"[get_share_detail] 请求参数：shareurl={shareurl[:50] if shareurl else 'None'}..., account_name={account_name}")
+        if shareurl:
+            try:
+                u = urllib.parse.urlparse(shareurl)
+                logger.debug(
+                    f"[get_share_detail] shareurl parsed: host={u.netloc}, path={u.path}, "
+                    f"query_keys={list(urllib.parse.parse_qs(u.query).keys())}, fragment={u.fragment[:50] if u.fragment else ''}"
+                )
+            except Exception as e:
+                logger.debug(f"[get_share_detail] shareurl parse failed: {e}")
         logger.debug(f"[get_share_detail] 任务配置：pattern={task.get('pattern', '')}, replace={task.get('replace', '')}, sort_index={task.get('sort_index', 1)}")
         
         # 根据 URL 或指定账户获取适配器
@@ -1089,7 +1104,10 @@ def get_share_detail():
             return jsonify({"success": False, "data": {"error": f"未配置有效的{type_label}账户，请先在「系统配置」→「多网盘账户」中添加{type_label}账户"}})
         
         pwd_id, passcode, pdir_fid, paths = account.extract_url(shareurl)
-        logger.debug(f"[get_share_detail] 解析分享链接：pwd_id={pwd_id}, pdir_fid={pdir_fid}")
+        logger.debug(
+            f"[get_share_detail] extract_url: drive_type={drive_type}, pwd_id={pwd_id}, pdir_fid={pdir_fid}, "
+            f"passcode_present={bool(passcode)}, paths_len={len(paths) if isinstance(paths, list) else 'na'}"
+        )
         
         # ── 判断是否需要预览 ──
         need_preview = bool(task)
@@ -1115,16 +1133,24 @@ def get_share_detail():
             """线程 A：获取分享详情（stoken → get_detail）"""
             nonlocal stoken
             if not stoken:
+                logger.debug(f"[fetch_share] stoken missing, calling get_stoken(pwd_id={pwd_id}, passcode_present={bool(passcode)})")
                 get_stoken = account.get_stoken(pwd_id, passcode)
                 if get_stoken.get("status") == 200:
                     stoken = get_stoken["data"]["stoken"]
+                    logger.debug(f"[fetch_share] get_stoken ok, stoken_present={bool(stoken)}")
                 else:
+                    logger.warning(f"[fetch_share] get_stoken failed: status={get_stoken.get('status')}, message={get_stoken.get('message')}")
                     return {"error": get_stoken.get("message", "获取 stoken 失败")}
+            else:
+                logger.debug(f"[fetch_share] stoken provided by client, stoken_present={bool(stoken)}")
             
             share_detail = account.get_detail(
                 pwd_id, stoken, pdir_fid, _fetch_share=1, fetch_share_full_path=1
             )
-            logger.debug(f"[fetch_share] 获取分享详情，文件数量：{len(share_detail.get('data', {}).get('list', []))}")
+            logger.debug(
+                f"[fetch_share] get_detail done: code={share_detail.get('code')}, message={share_detail.get('message')}, "
+                f"pdir_fid={pdir_fid}, list_len={len(share_detail.get('data', {}).get('list', []))}"
+            )
             return {"share_detail": share_detail, "stoken": stoken}
         
         def fetch_dir_data():
@@ -1270,14 +1296,15 @@ def _apply_preview_regex(data, task, magic_regex, dir_file_list, preview_account
 
             if fid:
                 lsdir_cache_key = make_cache_key(drive_type_key, cookie_key, 'lsdir', str(fid))
-                cached_ls = get_cached_lsdir(lsdir_cache_key)
+                cached_ls = None if drive_type_key == "123pan" else get_cached_lsdir(lsdir_cache_key)
                 if cached_ls is not None:
                     dir_file_list = cached_ls
                 else:
                     ls_result = preview_account.ls_dir(fid, max_items=2000)
                     if ls_result and "data" in ls_result:
                         dir_file_list = ls_result["data"].get("list", [])
-                        set_cached_lsdir(lsdir_cache_key, dir_file_list)
+                        if drive_type_key != "123pan":
+                            set_cached_lsdir(lsdir_cache_key, dir_file_list)
         except Exception as e:
             logger.warning(f"[preview_regex] 获取目标目录失败：{e}")
 
@@ -1292,16 +1319,23 @@ def _apply_preview_regex(data, task, magic_regex, dir_file_list, preview_account
     # 预编译搜索正则，避免循环内重复编译
     compiled_search = re.compile(pattern) if pattern else None
     compiled_subdir = re.compile(task["update_subdir"]) if task.get("update_subdir") else None
-    startfid = task.get("startfid", "")
+    startfid = str(task.get("startfid", "")).strip()
     ignore_ext = task.get("ignore_extension")
+    started = not bool(startfid)
 
     for share_file in data["list"]:
+        if not started:
+            if str(share_file.get("fid", "")).strip() == startfid:
+                started = True
+            else:
+                share_file["file_name_saved"] = "起始前"
+                continue
         search_re = (
             compiled_subdir
             if share_file["dir"] and compiled_subdir
             else compiled_search
         )
-        if search_re and search_re.search(share_file["file_name"]):
+        if (not search_re) or search_re.search(share_file["file_name"]):
             # 文件名重命名，目录不重命名
             file_name_re = (
                 share_file["file_name"]
@@ -1316,9 +1350,6 @@ def _apply_preview_regex(data, task, magic_regex, dir_file_list, preview_account
                 share_file["file_name_saved"] = file_name_saved
             else:
                 share_file["file_name_re"] = file_name_re
-        # 与实际转存逻辑一致：到达指定文件（含）后停止
-        if share_file["fid"] == startfid:
-            break
     
     # 文件列表排序
     if re.search(r"\{I+\}", replace):
@@ -1435,15 +1466,16 @@ def get_savepath_detail():
 
         # ls_dir 结果走应用级缓存
         lsdir_cache_key = make_cache_key(drive_type_key, cookie_key, 'lsdir', str(fid))
-        cached_ls = get_cached_lsdir(lsdir_cache_key)
+        cached_ls = None if drive_type_key == "123pan" else get_cached_lsdir(lsdir_cache_key)
         if cached_ls is not None:
             file_list_data = cached_ls
         else:
             ls_result = account.ls_dir(fid)
-            if not ls_result or "data" not in ls_result:
+            if not ls_result or ls_result.get("code") not in (0, "0") or "data" not in ls_result:
                 return jsonify({"success": False, "data": {"error": "获取目录列表失败，请检查Cookie是否有效"}})
             file_list_data = ls_result["data"].get("list", [])
-            set_cached_lsdir(lsdir_cache_key, file_list_data)
+            if drive_type_key != "123pan":
+                set_cached_lsdir(lsdir_cache_key, file_list_data)
 
         file_list = {
             "list": file_list_data,
@@ -2422,7 +2454,23 @@ def init():
                         if acc.get("drive_type") != drive_type:
                             continue
                         if account_name and acc.get("name") != account_name:
-                            continue
+                            if drive_type != "123pan":
+                                continue
+                            try:
+                                cookie_str = acc.get("cookie", "") or ""
+                                kv = {}
+                                for part in cookie_str.split(";"):
+                                    part = part.strip()
+                                    if not part or "=" not in part:
+                                        continue
+                                    k, v = part.split("=", 1)
+                                    kv[k.strip().lower()] = v.strip()
+                                cookie_username = kv.get("username") or kv.get("passport")
+                                cookie_name = kv.get("name")
+                                if account_name not in (cookie_username, cookie_name):
+                                    continue
+                            except Exception:
+                                continue
                         acc["cookie"] = new_token
                         acc["_token_updated_at"] = now
                         updated = True
@@ -2453,6 +2501,14 @@ def init():
             logging.info(">>> 迅雷网盘 token 保存器已初始化")
         except Exception as e:
             logging.warning(f">>> 初始化迅雷网盘 token 保存器失败: {e}")
+
+    if MULTI_DRIVE_SUPPORT:
+        try:
+            from adapters.pan123_adapter import set_config_saver as pan123_set_config_saver
+            pan123_set_config_saver(_make_token_saver("123pan"))
+            logging.info(">>> 123网盘 token 保存器已初始化")
+        except Exception as e:
+            logging.warning(f">>> 初始化123网盘 token 保存器失败: {e}")
 
     if sync_db:
         try:

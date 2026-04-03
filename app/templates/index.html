@@ -74,7 +74,7 @@
                         </div>
                       </div>
                       <div class="col-md-2">
-                        <select v-model="account.drive_type" class="form-control form-control-sm" :disabled="isTokenProtectedAccount(account)">
+                        <select v-model="account.drive_type" class="form-control form-control-sm" :disabled="isTokenProtectedAccount(account)" @change="onDriveTypeChanged(index)">
                           <option v-for="dt in driveTypes" :key="dt.value" :value="dt.value">
                             {{ dt.label }}
                           </option>
@@ -83,9 +83,16 @@
                       <div class="col-md-5">
                         <div class="input-group input-group-sm">
                           <input type="text" v-model="account.cookie" class="form-control" 
-                                 :placeholder="account.drive_type === 'aliyun' ? 'refresh_token' : (account.drive_type === 'xunlei' ? 'refresh_token' : 'Cookie')"
+                                 :placeholder="account.drive_type === 'aliyun' ? 'refresh_token' : (account.drive_type === 'xunlei' ? 'refresh_token' : (account.drive_type === '123pan' ? 'name=账号名;username=手机号或邮箱;password=登录密码;protocol=web' : 'Cookie'))"
                                  :disabled="isTokenProtectedAccount(account)"
                                  :title="isTokenProtectedAccount(account) ? 'Token 受保护，点击编辑按钮修改' : ''">
+                          <div class="input-group-append" v-if="account.drive_type === '123pan'">
+                            <button type="button" class="btn btn-outline-secondary"
+                                    data-toggle="tooltip" data-placement="top"
+                                    title="支持格式：name=...;username=...;password=...;authorization=Bearer ...（可选）;protocol=web|android;debug=1（可选）">
+                              <i class="bi bi-info-circle"></i>
+                            </button>
+                          </div>
                           <div class="input-group-append" v-if="account.drive_type === 'aliyun'">
                             <button type="button" class="btn btn-outline-info" @click="showAliyunQrcode(index)" title="扫码获取 refresh_token">
                               <i class="bi bi-qr-code-scan"></i>
@@ -1387,7 +1394,8 @@
           { value: 'baidu', label: '百度网盘', icon: 'bi-cloud-fill' },
           { value: 'xunlei', label: '迅雷网盘', icon: 'bi-lightning-fill' },
           { value: 'aliyun', label: '阿里云盘', icon: 'bi-cloud-arrow-up' },
-          { value: 'uc', label: 'UC网盘', icon: 'bi-folder' }
+          { value: 'uc', label: 'UC网盘', icon: 'bi-folder' },
+          { value: '123pan', label: '123网盘', icon: 'bi-cloud-download' }
         ],
         formData: {
           accounts: [],  // 多网盘账户配置
@@ -1968,6 +1976,14 @@
             acc.default = (i === index);
           });
         },
+        onDriveTypeChanged(index) {
+          const account = this.formData.accounts[index];
+          if (!account) return;
+          if (account.drive_type === '123pan' && (!account.cookie || !account.cookie.trim())) {
+            const name = account.name || '';
+            account.cookie = `name=${name};username=;password=;protocol=web`;
+          }
+        },
         // 记住账户原名称，用于修改时同步更新任务
         rememberAccountName(index, name) {
           this._oldAccountName = name;
@@ -2380,6 +2396,7 @@
           if (/pan\.xunlei\.com/.test(url)) return 'xunlei';
           if (/(?:alipan|aliyundrive)\.com/.test(url)) return 'aliyun';
           if (/drive\.uc\.cn/.test(url)) return 'uc';
+          if (/(?:123pan|123865|123684|123952|123912)\.com/.test(url)) return '123pan';
           return null;
         },
         getShareDetail() {
@@ -2492,7 +2509,7 @@
           if (!dir.fid || dir.fid == 0) {
             // 返回根URL：保留share code + 所有查询参数，去掉 # 及之后的部分
             // 兼容 Quark (?pwd=xxx) 和 115 (?password=xxx) 两种格式
-            let match = shareurl.match(/.*s\/[a-zA-Z0-9]+(\?[^#]*)?/);
+            let match = shareurl.match(/.*s\/[a-zA-Z0-9\-_]+(\?[^#]*)?/);
             shareurl = match ? match[0] : shareurl.split('#')[0];
           } else if (shareurl.includes(dir.fid)) {
             shareurl = shareurl.match(`.*/${dir.fid}[^/]*`)[0]

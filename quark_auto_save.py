@@ -1108,10 +1108,16 @@ class Quark:
         # 预编译搜索正则，避免循环内重复编译
         compiled_search = re.compile(pattern) if pattern else None
         compiled_subdir = re.compile(task["update_subdir"]) if task.get("update_subdir") else None
-        startfid = task.get("startfid", "")
+        startfid = str(task.get("startfid", "")).strip()
+        started = not bool(startfid)
         ignore_ext = task.get("ignore_extension")
         # 添加符合的
         for share_file in share_file_list:
+            if not started:
+                if str(share_file.get("fid", "")).strip() == startfid:
+                    started = True
+                else:
+                    continue
             # 如果是目录且未启用更新子目录，直接跳过
             if share_file["dir"] and not task.get("update_subdir"):
                 logger.debug(f"[dir_check_and_save] 跳过目录：{share_file['file_name']}")
@@ -1122,8 +1128,8 @@ class Quark:
                 if share_file["dir"] and compiled_subdir
                 else compiled_search
             )
-            # 正则文件名匹配
-            if search_re and search_re.search(share_file["file_name"]):
+            # 正则文件名匹配（未配置正则则视为全部匹配）
+            if (not search_re) or search_re.search(share_file["file_name"]):
                 # 判断原文件名是否存在，处理忽略扩展名
                 if not mr.is_exists(
                     share_file["file_name"],
@@ -1196,8 +1202,8 @@ class Quark:
                                 )
                                 tree.merge(share_file["fid"], subdir_tree, deep=False)
             # 指定文件开始订阅/到达指定文件（含）结束历遍
-            if share_file["fid"] == task.get("startfid", ""):
-                break
+            if startfid and str(share_file.get("fid", "")).strip() == startfid:
+                pass
 
         if re.search(r"\{I+\}", replace):
             # 获取排序起始值，如果没有配置则默认为 1
@@ -1656,10 +1662,17 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
     # 预编译搜索正则，避免循环内重复编译
     compiled_search = re.compile(pattern) if pattern else None
     compiled_subdir = re.compile(task["update_subdir"]) if task.get("update_subdir") else None
+    startfid = str(task.get("startfid", "")).strip()
+    started = not bool(startfid)
     ignore_ext = task.get("ignore_extension")
 
     # 添加符合的
     for share_file in share_file_list:
+        if not started:
+            if str(share_file.get("fid", "")).strip() == startfid:
+                started = True
+            else:
+                continue
         # 如果是目录且未启用更新子目录，直接跳过
         if share_file["dir"] and not task.get("update_subdir"):
             logger.debug(f"[dir_check_and_save_with_adapter] 跳过目录：{share_file['file_name']}")
@@ -1670,8 +1683,8 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
             if share_file["dir"] and compiled_subdir
             else compiled_search
         )
-        # 正则文件名匹配
-        if search_re and search_re.search(share_file["file_name"]):
+        # 正则文件名匹配（未配置正则则视为全部匹配）
+        if (not search_re) or search_re.search(share_file["file_name"]):
             # 判断原文件名是否存在
             if not mr.is_exists(
                 share_file["file_name"],
@@ -1729,8 +1742,8 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
                                 },
                             )
                             tree.merge(share_file["fid"], subdir_tree, deep=False)
-        if share_file["fid"] == task.get("startfid", ""):
-            break
+        if startfid and str(share_file.get("fid", "")).strip() == startfid:
+            pass
 
     if re.search(r"\{I+\}", replace):
         # 获取排序起始值，如果没有配置则默认为 1

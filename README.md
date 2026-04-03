@@ -1,6 +1,6 @@
 <div align="center">
 
-![quark-logo](img/icon.png)
+!\[quark-logo]\(img/icon.png null)
 
 # 网盘自动转存
 
@@ -8,24 +8,16 @@
 
 基于[Cp0204/quark-auto-save](https://github.com/Cp0204/quark-auto-save)修改，增加多网盘支持，修改前端UI。
 
-[![wiki][wiki-image]][wiki-url] [![github releases][gitHub-releases-image]][github-url] [![docker pulls][docker-pulls-image]][docker-url] [![docker image size][docker-image-size-image]][docker-url]
+[!\[wiki\](https://img.shields.io/badge/wiki-Documents-green?logo=github null)](https://github.com/ozoo0/cloud-auto-save/wiki) [!\[github releases\](https://img.shields.io/github/v/release/ozoo0/cloud-auto-save?logo=github null)](https://github.com/ozoo0/cloud-auto-save) [!\[docker pulls\](https://img.shields.io/docker/pulls/ozoo0/cloud-auto-save?logo=docker&\&logoColor=white null)](https://hub.docker.com/r/ozoo0/cloud-auto-save) [!\[docker image size\](https://img.shields.io/docker/image-size/ozoo0/cloud-auto-save?logo=docker&\&logoColor=white null)](https://hub.docker.com/r/ozoo0/cloud-auto-save)
 
-[wiki-image]: https://img.shields.io/badge/wiki-Documents-green?logo=github
-[gitHub-releases-image]: https://img.shields.io/github/v/release/ozoo0/cloud-auto-save?logo=github
-[docker-pulls-image]: https://img.shields.io/docker/pulls/ozoo0/cloud-auto-save?logo=docker&&logoColor=white
-[docker-image-size-image]: https://img.shields.io/docker/image-size/ozoo0/cloud-auto-save?logo=docker&&logoColor=white
-[github-url]: https://github.com/ozoo0/cloud-auto-save
-[docker-url]: https://hub.docker.com/r/ozoo0/cloud-auto-save
-[wiki-url]: https://github.com/ozoo0/cloud-auto-save/wiki
-
-![run_log](img/run_log.png)
+!\[run\_log]\(img/run\_log.png null)
 
 </div>
 
-> [!CAUTION]
+> \[!CAUTION]
 > ⛔️⛔️⛔️ 注意！资源不会每时每刻更新，**严禁设定过高的定时运行频率！** 以免账号风控和给网盘服务器造成不必要的压力。雪山崩塌，每一片雪花都有责任！
 
-> [!NOTE]
+> \[!NOTE]
 > 开发者≠客服，开源免费≠帮你解决使用问题；本项目 Wiki 已经相对完善，遇到问题请先翻阅 Issues 和 Wiki ，请勿盲目发问。
 
 ## 功能
@@ -33,7 +25,6 @@
 - 部署方式
   - [x] 可能~~兼容青龙~~
   - [x] Docker 部署，WebUI 配置
-
 - 网盘支持情况
   - [x] 夸克网盘
   - [x] 115网盘
@@ -41,30 +32,26 @@
   - [x] 阿里云盘
   - [x] UC网盘
   - [x] 迅雷网盘(长时间token会过期，待完善！)
-
+  - [x] 123网盘
 - 分享链接
   - [x] 支持分享链接的子目录
   - [x] 记录失效分享并跳过任务
   - [x] 支持需提取码的分享链接 <sup>[?](https://github.com/ozoo0/cloud-auto-save/wiki/使用技巧集锦#支持需提取码的分享链接)</sup>
   - [x] 智能搜索资源并自动填充 <sup>[?](https://github.com/ozoo0/cloud-auto-save/wiki/CloudSaver搜索源)</sup>
-
 - 文件管理
   - [x] 目标目录不存在时自动新建
   - [x] 跳过已转存过的文件
   - [x] 正则过滤要转存的文件名
   - [x] 转存后文件名整理（正则替换）
   - [x] 可选忽略文件后缀
-
 - 任务管理
   - [x] 支持多组任务
   - [x] 任务结束期限，期限后不执行此任务
   - [x] 可单独指定子任务星期几执行
-
 - 媒体库整合
   - [x] 根据任务名搜索 Emby 媒体库
   - [x] 追更或整理后自动刷新 Emby 媒体库
   - [x] 插件模块化，允许自行开发和挂载[插件](./plugins)
-
 - 数据同步
   - [x] 本地目录间文件同步(支持WebDav/FTP等本地挂载之后使用)
   - [x] 支持增量同步和覆盖同步两种模式
@@ -72,7 +59,6 @@
   - [x] 支持正则过滤和文件类型过滤
   - [x] 支持定时调度执行
   - [x] MD5 缓存加速，大文件快速指纹优化
-
 - 其它
   - [x] 每日签到领空间 <sup>[?](https://github.com/ozoo0/cloud-auto-save/wiki/使用技巧集锦#每日签到领空间)</sup>
   - [x] 支持多个通知推送渠道 <sup>[?](https://github.com/ozoo0/cloud-auto-save/wiki/通知推送服务配置)</sup>
@@ -122,22 +108,22 @@ services:
       - /mnt/local-storage:/app/datafiles/dest  # 可选，数据同步功能使用，本地存储目录
 ```
 
-管理地址：http://yourhost:5005
+管理地址：<http://yourhost:5005>
 
-| 环境变量         | 默认       | 备注                                     |
-| ---------------- | ---------- | ---------------------------------------- |
-| `WEBUI_USERNAME` | `admin`    | 管理账号                                 |
-| `WEBUI_PASSWORD` | `admin123` | 管理密码                                 |
-| `PORT`           | `5005`     | 管理后台端口                             |
-| `PLUGIN_FLAGS`   |            | 插件标志，如 `-emby,-aria2` 禁用某些插件 |
-| `TASK_TIMEOUT`   | `1800`     | 任务执行超时时间（秒），超时则任务结束   |
+| 环境变量             | 默认         | 备注                           |
+| ---------------- | ---------- | ---------------------------- |
+| `WEBUI_USERNAME` | `admin`    | 管理账号                         |
+| `WEBUI_PASSWORD` | `admin123` | 管理密码                         |
+| `PORT`           | `5005`     | 管理后台端口                       |
+| `PLUGIN_FLAGS`   | <br />     | 插件标志，如 `-emby,-aria2` 禁用某些插件 |
+| `TASK_TIMEOUT`   | `1800`     | 任务执行超时时间（秒），超时则任务结束          |
 
 **数据同步目录映射说明：**
 
 如需使用数据同步功能，需要额外映射 `datafiles` 目录：
 
-| 挂载点 | 说明 |
-|--------|------|
+| 挂载点              | 说明                          |
+| ---------------- | --------------------------- |
 | `/app/datafiles` | 数据同步的基础目录，源目录和目标目录均相对于此路径配置 |
 
 **示例场景：**
@@ -152,7 +138,6 @@ services:
    配置同步任务时：
    - 源目录：`source`
    - 目标目录：`dest`
-
 2. **多目录同步**
    ```yaml
    volumes:
@@ -170,9 +155,9 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtow
 <details open>
 <summary>WebUI 预览</summary>
 
-![screenshot_webui](img/screenshot_webui-1.png)
+!\[screenshot\_webui]\(img/screenshot\_webui-1.png null)
 
-![screenshot_webui](img/screenshot_webui-2.png)
+!\[screenshot\_webui]\(img/screenshot\_webui-2.png null)
 
 </details>
 
@@ -180,18 +165,18 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtow
 
 ### 正则处理示例
 
-| pattern                                | replace                 | 效果                                                                   |
-| -------------------------------------- | ----------------------- | ---------------------------------------------------------------------- |
-| `.*`                                   |                         | 无脑转存所有文件，不整理                                               |
-| `\.mp4$`                               |                         | 转存所有 `.mp4` 后缀的文件                                             |
-| `^【电影TT】花好月圆(\d+)\.(mp4\|mkv)` | `\1.\2`                 | 【电影TT】花好月圆01.mp4 → 01.mp4<br>【电影TT】花好月圆02.mkv → 02.mkv |
-| `^(\d+)\.mp4`                          | `S02E\1.mp4`            | 01.mp4 → S02E01.mp4<br>02.mp4 → S02E02.mp4                             |
-| `$TV`                                  |                         | [魔法匹配](#魔法匹配)剧集文件                                          |
-| `^(\d+)\.mp4`                          | `{TASKNAME}.S02E\1.mp4` | 01.mp4 → 任务名.S02E01.mp4                                             |
+| pattern                        | replace                 | 效果                                                 |
+| ------------------------------ | ----------------------- | -------------------------------------------------- |
+| `.*`                           | <br />                  | 无脑转存所有文件，不整理                                       |
+| `\.mp4$`                       | <br />                  | 转存所有 `.mp4` 后缀的文件                                  |
+| `^【电影TT】花好月圆(\d+)\.(mp4\|mkv)` | `\1.\2`                 | 【电影TT】花好月圆01.mp4 → 01.mp4【电影TT】花好月圆02.mkv → 02.mkv |
+| `^(\d+)\.mp4`                  | `S02E\1.mp4`            | 01.mp4 → S02E01.mp402.mp4 → S02E02.mp4             |
+| `$TV`                          | <br />                  | [魔法匹配](#魔法匹配)剧集文件                                  |
+| `^(\d+)\.mp4`                  | `{TASKNAME}.S02E\1.mp4` | 01.mp4 → 任务名.S02E01.mp4                            |
 
 更多正则使用说明：[正则处理教程](https://github.com/ozoo0/cloud-auto-save/wiki/正则处理教程)
 
-> [!TIP]
+> \[!TIP]
 >
 > **魔法匹配和魔法变量**：在正则处理中，我们定义了一些“魔法匹配”模式，如果 表达式 的值以 $ 开头且 替换式 留空，程序将自动使用预设的正则表达式进行匹配和替换。
 >
@@ -205,35 +190,36 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtow
 
 **同步模式：**
 
-| 模式 | 说明 |
-|------|------|
-| `增量同步` | 跳过已同步的文件，只同步新文件 |
+| 模式     | 说明                |
+| ------ | ----------------- |
+| `增量同步` | 跳过已同步的文件，只同步新文件   |
 | `覆盖同步` | 始终同步所有文件，覆盖已存在的文件 |
 
 **匹配模式：**
 
-| 模式 | 说明 |
-|------|------|
-| `文件名匹配` | 根据完整文件名（含扩展名）判断文件是否已存在 |
-| `去扩展名匹配` | 根据文件名（不含扩展名）判断文件是否已存在 |
+| 模式       | 说明                           |
+| -------- | ---------------------------- |
+| `文件名匹配`  | 根据完整文件名（含扩展名）判断文件是否已存在       |
+| `去扩展名匹配` | 根据文件名（不含扩展名）判断文件是否已存在        |
 | `MD5 匹配` | 根据文件 MD5 值判断文件是否已存在，可识别重命名文件 |
 
 **配置参数：**
 
-| 参数 | 说明 |
-|------|------|
-| `源目录` | 同步来源目录的相对路径（相对于 `datafiles/`） |
-| `目标目录` | 同步目标目录的相对路径（相对于 `datafiles/`） |
-| `正则过滤` | 可选，只同步匹配正则表达式的文件 |
-| `文件类型` | 可选，只同步指定类型的文件（视频/音频/图片/文档/字幕） |
-| `排除空目录` | 扫描时跳过没有文件的空目录 |
-| `MD5 缓存` | 启用 MD5 缓存加速，避免重复计算 |
+| 参数       | 说明                            |
+| -------- | ----------------------------- |
+| `源目录`    | 同步来源目录的相对路径（相对于 `datafiles/`） |
+| `目标目录`   | 同步目标目录的相对路径（相对于 `datafiles/`） |
+| `正则过滤`   | 可选，只同步匹配正则表达式的文件              |
+| `文件类型`   | 可选，只同步指定类型的文件（视频/音频/图片/文档/字幕） |
+| `排除空目录`  | 扫描时跳过没有文件的空目录                 |
+| `MD5 缓存` | 启用 MD5 缓存加速，避免重复计算            |
 | `快速指纹阈值` | 大文件使用快速指纹（采样头部/中部/尾部）代替完整 MD5 |
-| `并发数` | MD5 计算的并发工作线程数 |
+| `并发数`    | MD5 计算的并发工作线程数                |
 
 **使用示例：**
 
 同步网盘挂载目录到本地存储：
+
 - 源目录：`test_src`
 - 目标目录：`test_dest`
 - 同步模式：`增量同步`
@@ -256,34 +242,30 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtow
 
 ### 官方项目
 
-* [QAS一键推送助手](https://greasyfork.org/zh-CN/scripts/533201-qas一键推送助手)
+- [QAS一键推送助手](https://greasyfork.org/zh-CN/scripts/533201-qas一键推送助手)
 
   油猴脚本，在夸克网盘分享页面添加推送到 QAS 的按钮
-
-* [SmartStrm](https://github.com/1578411229/SmartStrm)
+- [SmartStrm](https://github.com/1578411229/SmartStrm)
 
   STRM 文件生成工具，用于转存后处理，媒体免下载入库播放。
 
 ### 第三方开源项目
 
-> [!TIP]
+> \[!TIP]
 >
 > 以下第三方开源项目均由社区开发并保持开源，与 QAS 作者无直接关联。在部署到生产环境前，请自行评估相关风险。
 >
 > 如果您有新的项目没有在此列出，可以通过 Issues 提交。
 
-* [nonebot-plugin-quark-autosave](https://github.com/fllesser/nonebot-plugin-quark-autosave)
+- [nonebot-plugin-quark-autosave](https://github.com/fllesser/nonebot-plugin-quark-autosave)
 
   QAS Telegram 机器人，快速管理自动转存任务
+- [Astrbot\_plugin\_quarksave](https://github.com/lm379/astrbot_plugin_quarksave)
 
-* [Astrbot_plugin_quarksave](https://github.com/lm379/astrbot_plugin_quarksave)
-
-  AstrBot 插件，调用 quark_auto_save 实现自动转存资源到夸克网盘
-
-* [Telegram 媒体资源管理机器人](https://github.com/2beetle/tgbot)
+  AstrBot 插件，调用 quark\_auto\_save 实现自动转存资源到夸克网盘
+- [Telegram 媒体资源管理机器人](https://github.com/2beetle/tgbot)
 
   一个功能丰富的 Telegram 机器人，专注于媒体资源管理、Emby 集成、自动下载和夸克网盘资源管理。
-
 
 ## 声明
 

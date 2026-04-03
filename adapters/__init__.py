@@ -11,6 +11,7 @@ from adapters.baidu_adapter import BaiduAdapter
 from adapters.xunlei_adapter import XunleiAdapter
 from adapters.aliyun_adapter import AliyunAdapter
 from adapters.uc_adapter import UCAdapter
+from adapters.pan123_adapter import Pan123Adapter
 from adapters.adapter_factory import AdapterFactory, AccountManager
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "XunleiAdapter",
     "AliyunAdapter",
     "UCAdapter",
+    "Pan123Adapter",
     "AdapterFactory",
     "AccountManager",
 ]
