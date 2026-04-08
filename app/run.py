@@ -62,6 +62,8 @@ from quark_auto_save import Quark, Config, MagicRename
 # 尝试导入多网盘支持模块
 try:
     from adapters import (
+
+        
         AdapterFactory, AccountManager, 
         QuarkAdapter, Cloud115Adapter,
         BaiduAdapter, XunleiAdapter, AliyunAdapter, UCAdapter
@@ -401,6 +403,88 @@ def _export_config_to_tempfile():
     export_path = os.path.join(config_dir, tmp_name)
     Config.write_json(export_path, export_data)
     return export_path
+
+
+def _task_match_key(task):
+    if not isinstance(task, dict):
+        return None
+    task_uid = str(task.get("task_uid", "") or "").strip()
+    if task_uid:
+        return ("uid", task_uid)
+    shareurl = str(task.get("shareurl", "") or "").strip()
+    savepath = str(task.get("savepath", "") or "").strip()
+    if shareurl or savepath:
+        return ("sp", shareurl, savepath)
+    return None
+
+
+def _extract_task_bans_from_config_file(export_path):
+    if not export_path:
+        return {}
+    try:
+        if not os.path.exists(export_path):
+            return {}
+    except Exception:
+        return {}
+    try:
+        with open(export_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    tasklist = data.get("tasklist", [])
+    if not isinstance(tasklist, list):
+        return {}
+    bans = {}
+    for task in tasklist:
+        if not isinstance(task, dict):
+            continue
+        ban = task.get("shareurl_ban")
+        if ban is None:
+            continue
+        ban = str(ban).strip()
+        if not ban:
+            continue
+        k = _task_match_key(task)
+        if k:
+            bans[k] = ban
+    return bans
+
+
+def _merge_task_bans_into_main_config(bans_map):
+    if not bans_map:
+        return 0
+    changed = 0
+    with _config_lock:
+        cfg = _reload_config_data()
+        if not isinstance(cfg, dict):
+            return 0
+        tasklist = cfg.get("tasklist", [])
+        if not isinstance(tasklist, list):
+            return 0
+        for task in tasklist:
+            if not isinstance(task, dict):
+                continue
+            k = _task_match_key(task)
+            if not k:
+                continue
+            ban = bans_map.get(k)
+            if not ban:
+                continue
+            if str(task.get("shareurl_ban", "") or "") == ban:
+                continue
+            task["shareurl_ban"] = ban
+            changed += 1
+        if changed > 0:
+            cfg = _sanitize_config_data(cfg)
+            globals()["config_data"] = cfg
+            try:
+                if sync_db:
+                    _save_config_to_db(cfg)
+                else:
+                    Config.write_json(CONFIG_PATH, cfg)
+            except Exception:
+                pass
+    return changed
 
 
 def _handle_linked_sync_tasks(tasklist, run_id=None):
@@ -968,6 +1052,13 @@ def run_script_now():
             _handle_linked_sync_tasks(tasklist, run_id)
 
             if export_path and os.path.exists(export_path):
+                try:
+                    bans = _extract_task_bans_from_config_file(export_path)
+                    changed = _merge_task_bans_into_main_config(bans)
+                    if changed > 0:
+                        logging.info(f">>> 已同步 {changed} 个任务的 shareurl_ban")
+                except Exception:
+                    pass
                 try:
                     os.remove(export_path)
                 except Exception:
@@ -2314,6 +2405,13 @@ def run_python(script_path, config_path):
             except Exception:
                 pass
         if export_path and os.path.exists(export_path):
+            try:
+                bans = _extract_task_bans_from_config_file(export_path)
+                changed = _merge_task_bans_into_main_config(bans)
+                if changed > 0:
+                    logging.info(f">>> 已同步 {changed} 个任务的 shareurl_ban")
+            except Exception:
+                pass
             try:
                 os.remove(export_path)
             except Exception:
