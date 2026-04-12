@@ -9,6 +9,7 @@ import shutil
 import hashlib
 import struct
 import logging
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger("sync.engine")
@@ -337,9 +338,12 @@ class FileSyncEngine:
             return finalize(result, "", None)
 
         except Exception as e:
+            tb = traceback.format_exc()
             self._log(f"  任务异常: {e}", log_callback)
+            self._log(tb, log_callback)
             elapsed = time.time() - start_time
             summary = self._build_summary("error", str(e), elapsed)
+            summary["error_detail"] = tb
             try:
                 self._emit("done", {
                     "result": "error",
@@ -362,7 +366,7 @@ class FileSyncEngine:
                 "synced": self._synced,
                 "skipped": self._skipped,
                 "failed": self._failed,
-                "error": str(e),
+                "error": tb,
             }
 
             task_execute_event = (
@@ -382,7 +386,7 @@ class FileSyncEngine:
                 sse_record = task_execute_event
 
             try:
-                self.db.update_task_snapshot(self.task_id, snapshot, sse_record, str(e))
+                self.db.update_task_snapshot(self.task_id, snapshot, sse_record, tb)
             except Exception:
                 pass
 
@@ -786,6 +790,10 @@ class FileSyncEngine:
             ]
             if summary.get("message"):
                 body_lines.append(f"信息: {summary['message']}")
+            if summary.get("result") in ("error", "partial") and summary.get("error_detail"):
+                body_lines.append("")
+                body_lines.append("异常：")
+                body_lines.append(str(summary["error_detail"]).strip())
 
             if summary.get("synced", 0) > 0 and self._synced_rel_paths:
                 def build_tree_lines(paths, limit=200):
@@ -841,7 +849,10 @@ class FileSyncEngine:
                     _os.environ[key] = value
 
             try:
-                if summary['synced']>0 or summary['failed']>0:
+                if summary.get("result") in ("error", "partial"):
+                    from quark_auto_save import send_ql_notify
+                    send_ql_notify(title, body)
+                elif summary.get("result") == "success" and summary.get("synced", 0) > 0:
                     from quark_auto_save import send_ql_notify
                     send_ql_notify(title, body)
             finally:
