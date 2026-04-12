@@ -1412,15 +1412,48 @@ def _apply_preview_regex(data, task, magic_regex, dir_file_list, preview_account
     compiled_subdir = re.compile(task["update_subdir"]) if task.get("update_subdir") else None
     startfid = str(task.get("startfid", "")).strip()
     ignore_ext = task.get("ignore_extension")
-    started = not bool(startfid)
+    start_ts = None
+    fid_keep = None
+    if startfid:
+        def _to_ts(v):
+            try:
+                return float(v)
+            except Exception:
+                return None
+
+        _start_item = next(
+            (
+                f
+                for f in data["list"]
+                if str(f.get("fid", "")).strip() == startfid
+            ),
+            None,
+        )
+        if _start_item:
+            start_ts = _to_ts(_start_item.get("updated_at"))
+            if start_ts is None:
+                _sorted = sorted(
+                    data["list"],
+                    key=lambda x: _to_ts(x.get("updated_at")) or 0,
+                    reverse=True,
+                )
+                _kept = []
+                for f in _sorted:
+                    if str(f.get("fid", "")).strip() == startfid:
+                        break
+                    _kept.append(str(f.get("fid", "")).strip())
+                fid_keep = set(_kept)
 
     for share_file in data["list"]:
-        if not started:
-            if str(share_file.get("fid", "")).strip() == startfid:
-                started = True
-            else:
-                share_file["file_name_saved"] = "起始前"
-                continue
+        if startfid:
+            if start_ts is not None:
+                if (_to_ts(share_file.get("updated_at")) or 0) <= start_ts:
+                    share_file["file_name_saved"] = "起始及之前"
+                    continue
+            elif fid_keep is not None:
+                if str(share_file.get("fid", "")).strip() not in fid_keep:
+                    share_file["file_name_saved"] = "起始及之前"
+                    continue
         search_re = (
             compiled_subdir
             if share_file["dir"] and compiled_subdir

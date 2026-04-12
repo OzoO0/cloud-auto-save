@@ -2085,6 +2085,7 @@
           if (!task.shareurl)
             return;
           this.$set(task, "shareurl_ban", undefined);
+          this.$set(task, "startfid", "");
           // 从URL中提取任务名
           try {
             const matches = decodeURIComponent(task.shareurl).match(/\/(\w{32})-([^\/]+)$/);
@@ -2491,8 +2492,13 @@
         },
         selectCurrentFolder(addTaskname = false) {
           if (this.fileSelect.selectShare) {
-            this.formData.tasklist[this.fileSelect.index].shareurl_ban = undefined;
-            this.formData.tasklist[this.fileSelect.index].shareurl = this.fileSelect.shareurl;
+            const t = this.formData.tasklist[this.fileSelect.index];
+            const oldShareurl = t.shareurl;
+            t.shareurl_ban = undefined;
+            t.shareurl = this.fileSelect.shareurl;
+            if (oldShareurl !== t.shareurl) {
+              this.$set(t, 'startfid', '');
+            }
           } else {
             this.formData.tasklist[this.fileSelect.index].savepath = "/" + this.fileSelect.paths.map(item => item.name).join("/");
             if (addTaskname) {
