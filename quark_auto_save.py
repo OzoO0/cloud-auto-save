@@ -565,6 +565,41 @@ class MagicRename:
             return filename if filename in filename_list else None
 
 
+def _dedupe_need_save_list(need_save_list, ignore_ext):
+    if not need_save_list:
+        return need_save_list
+    _best = {}
+    for _idx, _f in enumerate(need_save_list):
+        if _f.get("dir"):
+            continue
+        _target_name = _f.get("file_name_re") or _f.get("file_name")
+        if not _target_name:
+            continue
+        _key = os.path.splitext(_target_name)[0] if ignore_ext else _target_name
+        try:
+            _ts = float(_f.get("updated_at"))
+        except Exception:
+            _ts = float("-inf")
+        _prev = _best.get(_key)
+        if (_prev is None) or (_ts > _prev[0]) or (_ts == _prev[0] and _idx > _prev[1]):
+            _best[_key] = (_ts, _idx, str(_f.get("fid", "")))
+    if not _best:
+        return need_save_list
+    _new_list = []
+    for _f in need_save_list:
+        if _f.get("dir"):
+            _new_list.append(_f)
+            continue
+        _target_name = _f.get("file_name_re") or _f.get("file_name")
+        if not _target_name:
+            continue
+        _key = os.path.splitext(_target_name)[0] if ignore_ext else _target_name
+        _best_fid = _best.get(_key, (None, None, None))[2]
+        if _best_fid is not None and str(_f.get("fid", "")) == _best_fid:
+            _new_list.append(_f)
+    return _new_list
+
+
 class Quark:
     BASE_URL = "https://drive-pc.quark.cn"
     BASE_URL_APP = "https://drive-m.quark.cn"
@@ -1230,6 +1265,7 @@ class Quark:
                                     },
                                 )
                                 tree.merge(share_file["fid"], subdir_tree, deep=False)
+        need_save_list = _dedupe_need_save_list(need_save_list, ignore_ext)
         if re.search(r"\{I+\}", replace):
             # 获取排序起始值，如果没有配置则默认为 1
             start_index = task.get("sort_index", 1)
@@ -1796,6 +1832,7 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
                                 },
                             )
                             tree.merge(share_file["fid"], subdir_tree, deep=False)
+    need_save_list = _dedupe_need_save_list(need_save_list, ignore_ext)
     if re.search(r"\{I+\}", replace):
         # 获取排序起始值，如果没有配置则默认为 1
         start_index = task.get("sort_index", 1)

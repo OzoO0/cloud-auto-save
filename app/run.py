@@ -1475,6 +1475,36 @@ def _apply_preview_regex(data, task, magic_regex, dir_file_list, preview_account
             else:
                 share_file["file_name_re"] = file_name_re
     
+    _best = {}
+    for _idx, _f in enumerate(data["list"]):
+        if _f.get("file_name_saved"):
+            continue
+        if _f.get("dir"):
+            continue
+        _target = _f.get("file_name_re")
+        if not _target:
+            continue
+        _key = os.path.splitext(_target)[0] if (ignore_ext and not _f.get("dir")) else _target
+        try:
+            _ts = float(_f.get("updated_at"))
+        except Exception:
+            _ts = float("-inf")
+        _prev = _best.get(_key)
+        if (_prev is None) or (_ts > _prev[0]) or (_ts == _prev[0] and _idx > _prev[1]):
+            _best[_key] = (_ts, _idx)
+    if _best:
+        _keep_idx = set(v[1] for v in _best.values())
+        for _idx, _f in enumerate(data["list"]):
+            if _idx in _keep_idx:
+                continue
+            if _f.get("file_name_saved"):
+                continue
+            if _f.get("dir"):
+                continue
+            if _f.get("file_name_re"):
+                _f["file_name_saved"] = "重命名冲突（保留最新）"
+                _f.pop("file_name_re", None)
+
     # 文件列表排序
     if re.search(r"\{I+\}", replace):
         start_index = task.get("sort_index", 1)
