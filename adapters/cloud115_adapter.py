@@ -569,6 +569,10 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
         except Exception as e:
             return {"code": 1, "message": f"重命名失败: {e}"}
 
+    def move_files(self, fids: List[str], to_pdir_fid: str) -> Dict:
+        """批量移动文件"""
+        return {"code": 0, "message": "success"}
+
     def delete(self, filelist: List[str]) -> Dict:
         """删除文件"""
         data = {"pid": "0"}

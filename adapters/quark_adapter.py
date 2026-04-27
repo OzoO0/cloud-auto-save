@@ -427,6 +427,36 @@ class QuarkAdapter(BaseCloudDriveAdapter):
         ).json()
         return response
 
+    def unarchive(self, fid, to_pdir_fid):
+        url = f"{self.BASE_URL}/1/clouddrive/archive/unarchive"
+        querystring = {"uc_param_str": "", "fr": "pc", "pr": "ucpro"}
+        payload = {
+            "fid": fid,
+            "to_pdir_fid": to_pdir_fid,
+            "conflict_mode": 3,
+            "suffix_type": 0,
+            "pwd": "",
+            "select_mode": 0,
+        }
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
+        ).json()
+        return response
+
+    def move_files(self, fids, to_pdir_fid):
+        url = f"{self.BASE_URL}/1/clouddrive/file/move"
+        querystring = {"uc_param_str": "", "fr": "pc", "pr": "ucpro"}
+        payload = {
+            "filelist": fids,
+            "to_pdir_fid": to_pdir_fid,
+            "exclude_fids": [],
+            "action_type": 1,
+        }
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
+        ).json()
+        return response
+
     def download(self, fids: List[str]) -> Tuple[Dict, str]:
         """获取下载链接"""
         url = f"{self.BASE_URL}/1/clouddrive/file/download"

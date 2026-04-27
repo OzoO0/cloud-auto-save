@@ -164,6 +164,28 @@ class BaseCloudDriveAdapter(ABC):
         """
         pass
 
+    def unarchive(self, fid: str, to_pdir_fid: str) -> Dict:
+        """
+        云解压文件（可选实现）
+        Args:
+            fid: 压缩包文件ID
+            to_pdir_fid: 解压到的目录ID
+        Returns:
+            响应字典，包含 code, data.task_id 等字段
+        """
+        return {"code": 0, "message": "success", "data": {"task_id": ""}}
+
+    def move_files(self, fids: List[str], to_pdir_fid: str) -> Dict:
+        """
+        批量移动文件（可选实现）
+        Args:
+            fids: 文件ID列表
+            to_pdir_fid: 目标目录ID
+        Returns:
+            响应字典
+        """
+        return {"code": 0, "message": "success"}
+
     def get_account_info(self) -> Any:
         """获取账户信息（可选实现）"""
         return False

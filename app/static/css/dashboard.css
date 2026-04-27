@@ -6,7 +6,7 @@
 
 /* --- Color Scheme Hint --- */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 }
 
 /* =====================
@@ -32,21 +32,21 @@
   --apple-indigo: #5856D6;
 
   /* Backgrounds */
-  --bg-primary: #f5f5f7;
+  --bg-primary: #f2f4f7;
   --bg-secondary: #ffffff;
-  --bg-tertiary: #f2f2f7;
+  --bg-tertiary: #eef1f5;
   --bg-elevated: #ffffff;
 
   /* Text */
   --text-primary: #1d1d1f;
-  --text-secondary: #6e6e73;
-  --text-tertiary: #aeaeb2;
+  --text-secondary: #5f6368;
+  --text-tertiary: #8d9196;
   --text-on-fill: #ffffff;
 
   /* Borders */
-  --border-color: rgba(0, 0, 0, 0.08);
-  --border-color-strong: rgba(0, 0, 0, 0.15);
-  --separator-color: rgba(0, 0, 0, 0.06);
+  --border-color: rgba(0, 0, 0, 0.1);
+  --border-color-strong: rgba(0, 0, 0, 0.18);
+  --separator-color: rgba(0, 0, 0, 0.08);
 
   /* Shadows */
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -56,8 +56,8 @@
   --shadow-blue-glow: 0 4px 16px rgba(0, 122, 255, 0.2);
 
   /* Glass */
-  --glass-bg: rgba(255, 255, 255, 0.72);
-  --glass-bg-thick: rgba(255, 255, 255, 0.88);
+  --glass-bg: rgba(255, 255, 255, 0.78);
+  --glass-bg-thick: rgba(255, 255, 255, 0.9);
   --glass-border: rgba(255, 255, 255, 0.5);
 
   /* Spacing */
@@ -107,43 +107,42 @@
 }
 
 /* --- Dark Mode --- */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-primary: #000000;
-    --bg-secondary: #1c1c1e;
-    --bg-tertiary: #2c2c2e;
-    --bg-elevated: #2c2c2e;
+:root.dark-theme {
+  color-scheme: dark;
+  --bg-primary: #000000;
+  --bg-secondary: #1c1c1e;
+  --bg-tertiary: #2c2c2e;
+  --bg-elevated: #2c2c2e;
 
-    --text-primary: #f5f5f7;
-    --text-secondary: #a1a1a6;
-    --text-tertiary: #636366;
+  --text-primary: #f5f5f7;
+  --text-secondary: #a1a1a6;
+  --text-tertiary: #636366;
 
-    --border-color: rgba(255, 255, 255, 0.08);
-    --border-color-strong: rgba(255, 255, 255, 0.15);
-    --separator-color: rgba(255, 255, 255, 0.06);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-color-strong: rgba(255, 255, 255, 0.15);
+  --separator-color: rgba(255, 255, 255, 0.06);
 
-    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
-    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
-    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.4);
-    --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.4);
-    --shadow-blue-glow: 0 4px 16px rgba(10, 132, 255, 0.25);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.4);
+  --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --shadow-blue-glow: 0 4px 16px rgba(10, 132, 255, 0.25);
 
-    --glass-bg: rgba(44, 44, 46, 0.72);
-    --glass-bg-thick: rgba(44, 44, 46, 0.88);
-    --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-bg: rgba(44, 44, 46, 0.72);
+  --glass-bg-thick: rgba(44, 44, 46, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.08);
 
-    --apple-blue: #0A84FF;
-    --apple-blue-hover: #409CFF;
-    --apple-blue-light: rgba(10, 132, 255, 0.15);
-    --apple-green: #30D158;
-    --apple-green-hover: #4bda6e;
-    --apple-green-light: rgba(48, 209, 88, 0.15);
-    --apple-red: #FF453A;
-    --apple-red-hover: #ff6961;
-    --apple-red-light: rgba(255, 69, 58, 0.15);
-    --apple-orange-light: rgba(255, 149, 0, 0.15);
-    --apple-teal-light: rgba(90, 200, 250, 0.15);
-  }
+  --apple-blue: #0A84FF;
+  --apple-blue-hover: #409CFF;
+  --apple-blue-light: rgba(10, 132, 255, 0.15);
+  --apple-green: #30D158;
+  --apple-green-hover: #4bda6e;
+  --apple-green-light: rgba(48, 209, 88, 0.15);
+  --apple-red: #FF453A;
+  --apple-red-hover: #ff6961;
+  --apple-red-light: rgba(255, 69, 58, 0.15);
+  --apple-orange-light: rgba(255, 149, 0, 0.15);
+  --apple-teal-light: rgba(90, 200, 250, 0.15);
 }
 
 /* =====================
@@ -1625,6 +1624,54 @@ table.jsoneditor-tree > tbody > tr.jsoneditor-expandable:first-child {
   display: none;
 }
 
+html.dark-theme .jsoneditor-outer,
+html.dark-theme .jsoneditor-outer.has-main-menu-bar,
+html.dark-theme .jsoneditor-outer.has-main-menu-bar.has-nav-bar,
+html.dark-theme .jsoneditor-outer .jsoneditor,
+html.dark-theme .jsoneditor-outer .jsoneditor-tree,
+html.dark-theme .jsoneditor-outer .jsoneditor-tree-inner,
+html.dark-theme .jsoneditor-outer table.jsoneditor-tree,
+html.dark-theme .jsoneditor-outer table.jsoneditor-values,
+html.dark-theme .jsoneditor-outer .jsoneditor-values {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}
+
+html.dark-theme .jsoneditor-outer .jsoneditor-menu,
+html.dark-theme .jsoneditor-outer .jsoneditor-main-menu-bar,
+html.dark-theme .jsoneditor-outer .jsoneditor-navigation-bar {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+html.dark-theme .jsoneditor-outer .jsoneditor-search input,
+html.dark-theme .jsoneditor-outer .jsoneditor-search input[type="text"],
+html.dark-theme .jsoneditor-outer .jsoneditor-search input[type="search"] {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+html.dark-theme .jsoneditor-outer .jsoneditor-value,
+html.dark-theme .jsoneditor-outer .jsoneditor-field,
+html.dark-theme .jsoneditor-outer .jsoneditor-readonly,
+html.dark-theme .jsoneditor-outer .jsoneditor-value.jsoneditor-object {
+  color: var(--text-primary) !important;
+}
+
+html.dark-theme .jsoneditor-outer .jsoneditor-tree td,
+html.dark-theme .jsoneditor-outer .jsoneditor-values td,
+html.dark-theme .jsoneditor-outer .jsoneditor-tree tr,
+html.dark-theme .jsoneditor-outer .jsoneditor-separator {
+  border-color: var(--separator-color) !important;
+}
+
+html.dark-theme .jsoneditor-outer .jsoneditor-selected,
+html.dark-theme .jsoneditor-outer tr.jsoneditor-selected {
+  background: var(--bg-tertiary) !important;
+}
+
 /* Task add area */
 .task-add-area {
   text-align: center;
@@ -1884,106 +1931,100 @@ table.jsoneditor-tree > tbody > tr.jsoneditor-expandable:first-child {
 /* =====================
    20. Dark Mode - Bootstrap overrides
    ===================== */
-@media (prefers-color-scheme: dark) {
-  body {
-    background-color: var(--bg-primary);
-    color: var(--text-primary);
-  }
+.dark-theme body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
 
-  .bg-light {
-    background-color: var(--bg-secondary) !important;
-  }
+.dark-theme .bg-light {
+  background-color: var(--bg-secondary) !important;
+}
 
-  .bg-dark {
-    background-color: var(--bg-secondary) !important;
-  }
+.dark-theme .bg-dark {
+  background-color: var(--bg-secondary) !important;
+}
 
-  .navbar-dark {
-    background-color: transparent !important;
-  }
+.dark-theme .navbar-dark {
+  background-color: transparent !important;
+}
 
-  .form-control,
-  select.form-control {
-    background-color: var(--bg-tertiary);
-    color: var(--text-primary);
-    border-color: var(--border-color);
-  }
+.dark-theme .form-control,
+.dark-theme select.form-control {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
 
-  .input-group-text {
-    background-color: var(--bg-tertiary);
-    color: var(--text-secondary);
-    border-color: var(--border-color);
-  }
+.dark-theme .input-group-text {
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
 
-  .table {
-    color: var(--text-primary);
-  }
+.dark-theme .table {
+  color: var(--text-primary);
+}
 
-  .table thead th {
-    color: var(--text-secondary);
-    border-color: var(--separator-color);
-  }
+.dark-theme .table thead th {
+  color: var(--text-secondary);
+  border-color: var(--separator-color);
+}
 
-  .table td {
-    border-color: var(--separator-color);
-  }
+.dark-theme .table td {
+  border-color: var(--separator-color);
+}
 
-  .close {
-    color: var(--text-secondary);
-  }
+.dark-theme .close {
+  color: var(--text-secondary);
+}
 
-  img {
-    opacity: 0.9;
-  }
+.dark-theme img {
+  opacity: 0.9;
+}
 
-  .card {
-    background-color: var(--bg-secondary);
-    border-color: var(--border-color);
-  }
+.dark-theme .card {
+  background-color: var(--bg-secondary);
+  border-color: var(--border-color);
+}
 
-  .btn-outline-secondary {
-    border-color: var(--border-color-strong);
-    color: var(--text-secondary);
-  }
+.dark-theme .btn-outline-secondary {
+  border-color: var(--border-color-strong);
+  color: var(--text-secondary);
+}
 
-  .btn-outline-secondary:hover {
-    background-color: var(--bg-tertiary);
-    color: var(--text-primary);
-    border-color: var(--border-color-strong);
-  }
+.dark-theme .btn-outline-secondary:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--border-color-strong);
+}
 
-  .badge.bg-transparent {
-    border-color: currentColor !important;
-  }
+.dark-theme .badge.bg-transparent {
+  border-color: currentColor !important;
+}
 
-  .task-suggestions {
-    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.35);
-  }
+.dark-theme .task-suggestions {
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.35);
+}
 
-  /* Remove default dark bg overrides from Bootstrap */
-  .navbar-brand {
-    color: var(--text-primary) !important;
-  }
+.dark-theme .navbar-brand {
+  color: var(--text-primary) !important;
+}
 
-  pre {
-    color: var(--text-primary);
-  }
+.dark-theme pre {
+  color: var(--text-primary);
+}
 
-  /* Better dark mode focus ring */
-  .form-control:focus,
-  .form-select:focus {
-    box-shadow: 0 0 0 3px var(--apple-blue-light);
-  }
+.dark-theme .form-control:focus,
+.dark-theme .form-select:focus {
+  box-shadow: 0 0 0 3px var(--apple-blue-light);
+}
 
-  /* Toast dark enhancement */
-  .toast {
-    box-shadow: var(--shadow-lg);
-  }
+.dark-theme .toast {
+  box-shadow: var(--shadow-lg);
+}
 
-  /* Modal dark enhancement */
-  .modal-content {
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-  }
+.dark-theme .modal-content {
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 
 /* =====================

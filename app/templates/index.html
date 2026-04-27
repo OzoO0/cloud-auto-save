@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
   <meta name="description" content="网盘自动转存 - 多网盘资源自动转存管理工具">
   <title>网盘自动转存</title>
@@ -32,6 +32,9 @@
         </button>
       </div>
       <div class="navbar-actions">
+        <a href="#" @click.prevent="toggleTheme" :title="theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'">
+          <i class="bi" :class="theme === 'dark' ? 'bi-sun-fill' : 'bi-moon-stars-fill'"></i> <span>{{ theme === 'dark' ? '亮色' : '暗色' }}</span>
+        </a>
         <a href="/logout" title="退出登录"><i class="bi bi-box-arrow-right"></i> <span>退出</span></a>
       </div>
     </nav>
@@ -926,6 +929,14 @@
                   </li>
                 </ol>
               </nav>
+              <div v-if="ui.isMobile" class="d-flex justify-content-end mb-2">
+                <select class="form-control form-control-sm w-auto" v-model="fileSelect.mobileSort" @change="applyMobileSort">
+                  <option value="file_name:asc">文件名 ↑</option>
+                  <option value="file_name:desc">文件名 ↓</option>
+                  <option value="updated_at:asc">修改日期 ↑</option>
+                  <option value="updated_at:desc">修改日期 ↓</option>
+                </select>
+              </div>
               <!-- 文件列表 -->
               <div v-if="ui.isMobile" class="file-list-mobile">
                 <div v-for="(file, key) in fileSelect.fileList" :key="key" class="file-list-item" @click="fileSelect.selectDir ? (file.dir ? navigateTo(file.fid, file.file_name) : null) : selectStartFid(file.fid)" :class="{'is-clickable': fileSelect.selectDir ? file.dir : true}">
@@ -935,8 +946,15 @@
                   <div class="file-list-main">
                     <div class="file-list-name">{{ file.file_name }}</div>
                     <div class="file-list-meta">
-                      <template v-if="fileSelect.previewRegex">
-                        <span v-if="fileSelect.selectShare" :class="file.file_name_re ? 'text-success' : file.file_name_saved ? 'text-muted' : 'text-danger'">{{ file.file_name_re || file.file_name_saved || '×' }}</span>
+                      <template v-if="fileSelect.selectShare">
+                        <span :class="file.file_name_re ? 'text-success' : file.file_name_saved ? 'text-muted' : 'text-danger'">{{ file.file_name_re || file.file_name_saved || '×' }}</span>
+                        <template v-if="!fileSelect.previewRegex">
+                          <span class="file-list-dot">·</span>
+                          <span v-if="file.dir && file.include_items !== undefined">{{ file.include_items }}项</span>
+                          <span v-else-if="!file.dir && file.size !== undefined">{{ file.size | size }}</span>
+                          <span v-if="file.updated_at" class="file-list-dot">·</span>
+                          <span v-if="file.updated_at">{{ file.updated_at | ts2date }}</span>
+                        </template>
                       </template>
                       <template v-else>
                         <span v-if="file.dir">{{ file.include_items }}项</span>
@@ -1387,6 +1405,7 @@
         version: "[[ version ]]",
         versionTips: "",
         plugin_flags: "[[ plugin_flags ]]",
+        theme: "light",
         weekdays: ['周一', '周二', '周三', '周四', '周五', '周六', '周日'],
         driveTypes: [
           { value: 'quark', label: '夸克网盘', icon: 'bi-cloud' },
@@ -1482,6 +1501,7 @@
           selectShare: true,
           switchShare: false,
           previewRegex: false,
+          mobileSort: "updated_at:desc",
           sortBy: "updated_at",
           sortOrder: "desc",
           driveType: "quark",       // 当前显示的网盘类型
@@ -1601,6 +1621,7 @@
         }
       },
       mounted() {
+        this.initTheme();
         this.fetchData();
         this.checkNewVersion();
         this.updateViewportFlags();
@@ -1674,6 +1695,118 @@
         },
       },
       methods: {
+        initTheme() {
+          var saved = null;
+          try { saved = localStorage.getItem('qas_theme'); } catch (e) {}
+          if (saved === 'dark' || saved === 'light') {
+            this.theme = saved;
+          } else {
+            this.theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+          }
+          this.applyTheme();
+        },
+        applyTheme() {
+          if (this.theme === 'dark') {
+            document.documentElement.classList.add('dark-theme');
+          } else {
+            document.documentElement.classList.remove('dark-theme');
+          }
+          this.$nextTick(() => {
+            this.applyJsonEditorTheme();
+          });
+        },
+        applyJsonEditorTheme() {
+          var rootStyle = window.getComputedStyle ? window.getComputedStyle(document.documentElement) : null;
+          var bgSecondary = rootStyle ? rootStyle.getPropertyValue('--bg-secondary').trim() : '';
+          var bgTertiary = rootStyle ? rootStyle.getPropertyValue('--bg-tertiary').trim() : '';
+          var textPrimary = rootStyle ? rootStyle.getPropertyValue('--text-primary').trim() : '';
+          var borderColor = rootStyle ? rootStyle.getPropertyValue('--border-color').trim() : '';
+          var separatorColor = rootStyle ? rootStyle.getPropertyValue('--separator-color').trim() : '';
+
+          var setImportant = function(el, prop, value) {
+            try { el.style.setProperty(prop, value, 'important'); } catch (e) {}
+          };
+          var clearProp = function(el, prop) {
+            try { el.style.removeProperty(prop); } catch (e) {}
+          };
+          var applyTo = function(selector, fn) {
+            try {
+              document.querySelectorAll(selector).forEach(fn);
+            } catch (e) {}
+          };
+
+          if (this.theme === 'dark') {
+            applyTo('.jsoneditor-outer, .jsoneditor, .jsoneditor-tree, .jsoneditor-tree-inner, .jsoneditor-values, table.jsoneditor-tree, table.jsoneditor-values', function(el) {
+              setImportant(el, 'background', bgSecondary);
+              setImportant(el, 'color', textPrimary);
+            });
+            applyTo('.jsoneditor-menu, .jsoneditor-main-menu-bar, .jsoneditor-navigation-bar, .jsoneditor-search', function(el) {
+              setImportant(el, 'background', bgTertiary);
+              setImportant(el, 'color', textPrimary);
+              setImportant(el, 'border-color', borderColor);
+            });
+            applyTo('.jsoneditor-search input, .jsoneditor-search input[type="text"], .jsoneditor-search input[type="search"]', function(el) {
+              setImportant(el, 'background', bgSecondary);
+              setImportant(el, 'background-color', bgSecondary);
+              setImportant(el, 'color', textPrimary);
+              setImportant(el, 'border-color', borderColor);
+            });
+            try {
+              var el = document.querySelector('div#collapse_2 > div.task-card-body > div.form-group:nth-child(11) > div.col-sm-10 > div.jsoneditor-container > div.jsoneditor-box > div.jsoneditor > div.jsoneditor-menu > div.jsoneditor-search > div.jsoneditor-frame > input');
+              if (el) {
+                setImportant(el, 'background', 'transparent');
+                setImportant(el, 'background-color', 'transparent');
+              }
+            } catch (e) {}
+            try {
+              var frameEl = document.querySelector('div#collapse_2 > div.task-card-body > div.form-group:nth-child(11) > div.col-sm-10 > div.jsoneditor-container > div.jsoneditor-box > div.jsoneditor > div.jsoneditor-menu > div.jsoneditor-search > div.jsoneditor-frame');
+              if (frameEl) {
+                setImportant(frameEl, 'background', 'transparent');
+                setImportant(frameEl, 'background-color', 'transparent');
+              }
+            } catch (e) {}
+            applyTo('.jsoneditor-value, .jsoneditor-field, .jsoneditor-readonly, .jsoneditor-treepath', function(el) {
+              setImportant(el, 'color', textPrimary);
+            });
+            applyTo('.jsoneditor-separator, .jsoneditor-tree td, .jsoneditor-values td, .jsoneditor-tree tr', function(el) {
+              setImportant(el, 'border-color', separatorColor);
+            });
+          } else {
+            applyTo('.jsoneditor-outer, .jsoneditor, .jsoneditor-tree, .jsoneditor-tree-inner, .jsoneditor-values, table.jsoneditor-tree, table.jsoneditor-values', function(el) {
+              clearProp(el, 'background');
+              clearProp(el, 'color');
+            });
+            applyTo('.jsoneditor-menu, .jsoneditor-main-menu-bar, .jsoneditor-navigation-bar, .jsoneditor-search', function(el) {
+              clearProp(el, 'background');
+              clearProp(el, 'color');
+              clearProp(el, 'border-color');
+            });
+            applyTo('.jsoneditor-search input, .jsoneditor-search input[type="text"], .jsoneditor-search input[type="search"]', function(el) {
+              clearProp(el, 'background');
+              clearProp(el, 'background-color');
+              clearProp(el, 'color');
+              clearProp(el, 'border-color');
+            });
+            try {
+              var frameEl = document.querySelector('div#collapse_2 > div.task-card-body > div.form-group:nth-child(11) > div.col-sm-10 > div.jsoneditor-container > div.jsoneditor-box > div.jsoneditor > div.jsoneditor-menu > div.jsoneditor-search > div.jsoneditor-frame');
+              if (frameEl) {
+                clearProp(frameEl, 'background');
+                clearProp(frameEl, 'background-color');
+              }
+            } catch (e) {}
+            applyTo('.jsoneditor-value, .jsoneditor-field, .jsoneditor-readonly, .jsoneditor-treepath', function(el) {
+              clearProp(el, 'color');
+            });
+            applyTo('.jsoneditor-separator, .jsoneditor-tree td, .jsoneditor-values td, .jsoneditor-tree tr', function(el) {
+              clearProp(el, 'border-color');
+            });
+          }
+        },
+        toggleTheme() {
+          this.theme = this.theme === 'dark' ? 'light' : 'dark';
+          this.applyTheme();
+          try { localStorage.setItem('qas_theme', this.theme); } catch (e) {}
+        },
         updateViewportFlags() {
           var w = window.innerWidth || document.documentElement.clientWidth || 0;
           this.ui.isMobile = w <= 768;
@@ -1897,6 +2030,9 @@
                 return task;
               });
               this.formData = config_data;
+              this.$nextTick(() => {
+                this.applyJsonEditorTheme();
+              });
               // 同时获取同步任务列表（用于任务关联同步任务配置）
               this.fetchSyncTasks();
               setTimeout(() => {
@@ -2367,6 +2503,7 @@
           this.fileSelect.fileList = [];
           this.fileSelect.paths = [];
           this.fileSelect.index = index;
+          this.syncMobileSortFromState();
           
           const task = this.formData.tasklist[index];
           // 如果任务没有指定账户，但有分享链接，尝试从链接检测网盘类型并自动选择账户
@@ -2440,6 +2577,7 @@
           }
           this.fileSelect.shareurl = newShareurl;
           this.fileSelect.index = index;
+          this.syncMobileSortFromState();
           $('#fileSelectModal').modal('toggle');
           this.getShareDetail();
         },
@@ -2538,13 +2676,29 @@
             let valA = a[this.fileSelect.sortBy];
             let valB = b[this.fileSelect.sortBy];
 
-            if (typeof valA === "string") valA = valA.toLowerCase();
-            if (typeof valB === "string") valB = valB.toLowerCase();
+            if (this.fileSelect.sortBy === "updated_at") {
+              valA = Number(valA) || 0;
+              valB = Number(valB) || 0;
+            } else {
+              valA = (valA ?? "").toString().toLowerCase();
+              valB = (valB ?? "").toString().toLowerCase();
+            }
 
             if (valA < valB) return this.fileSelect.sortOrder === "asc" ? -1 : 1;
             if (valA > valB) return this.fileSelect.sortOrder === "asc" ? 1 : -1;
             return 0;
           });
+        },
+        syncMobileSortFromState() {
+          this.fileSelect.mobileSort = `${this.fileSelect.sortBy}:${this.fileSelect.sortOrder}`;
+        },
+        applyMobileSort() {
+          const parts = (this.fileSelect.mobileSort || "").split(":");
+          const sortBy = parts[0] || "file_name";
+          const sortOrder = parts[1] || "asc";
+          this.fileSelect.sortBy = sortBy;
+          this.fileSelect.sortOrder = sortOrder;
+          this.sortFileList(sortBy, sortOrder);
         },
         inputRawMagicRegex(task) {
           const item = this.formData.magic_regex[task.pattern];

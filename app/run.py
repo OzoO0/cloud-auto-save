@@ -186,7 +186,7 @@ def _get_or_create_flask_secret_key():
 
 
 app.secret_key = _get_or_create_flask_secret_key()
-app.config["SESSION_COOKIE_NAME"] = "QUARK_AUTO_SAVE_SESSION"
+app.config["SESSION_COOKIE_NAME"] = "CLOUD_AUTO_SAVE_SESSION"
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=31)
 app.json.ensure_ascii = False
 app.json.sort_keys = False
@@ -2593,6 +2593,22 @@ def init():
                 .get(key, value)
             )
     config_data["plugins"] = plugins_config_default
+
+    tasklist = config_data.get("tasklist", [])
+    if isinstance(tasklist, list) and isinstance(task_plugins_config_default, dict):
+        for task in tasklist:
+            if not isinstance(task, dict):
+                continue
+            addition = task.get("addition")
+            if not isinstance(addition, dict):
+                addition = {}
+            for plugin_name, default_task_cfg in task_plugins_config_default.items():
+                if plugin_name not in addition or not isinstance(addition.get(plugin_name), dict):
+                    addition[plugin_name] = default_task_cfg
+                else:
+                    for k, v in default_task_cfg.items():
+                        addition[plugin_name].setdefault(k, v)
+            task["addition"] = addition
 
     config_data = _sanitize_config_data(config_data)
     with _config_lock:
