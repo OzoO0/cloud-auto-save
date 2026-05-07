@@ -1251,7 +1251,7 @@ def get_task_suggestions():
         search_results = []
         with ThreadPoolExecutor(max_workers=3) as executor:
             features = []
-            # features.append(executor.submit(net_search))
+            features.append(executor.submit(net_search))
             features.append(executor.submit(cs_search))
             features.append(executor.submit(ps_search))
             for future in as_completed(features):

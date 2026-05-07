@@ -166,9 +166,9 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtow
 <details open>
 <summary>WebUI 预览</summary>
 
-!\[screenshot\_webui]\(img/screenshot\_webui-1.png null)
+![screenshot_webui](img/screenshot_webui-1.png)
 
-!\[screenshot\_webui]\(img/screenshot\_webui-2.png null)
+![screenshot_webui](img/screenshot_webui-2.png)
 
 </details>
 
