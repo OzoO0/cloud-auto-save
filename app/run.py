@@ -21,6 +21,7 @@ from sdk.pansou import PanSou
 from datetime import datetime, timezone, timedelta
 import subprocess
 import requests
+from typing import Dict, List, Tuple
 import hashlib
 import secrets
 import logging
@@ -33,6 +34,7 @@ import os
 import re
 import time
 import urllib.parse
+import uuid
 
 # 导入日志工具
 try:
@@ -133,6 +135,131 @@ config_data = {}
 task_plugins_config_default = {}
 CONFIG_DB_KEY = "quark_config"
 _config_lock = threading.Lock()
+
+_cloud189_login_sessions = {}
+_cloud189_login_sessions_lock = threading.Lock()
+_cloud189_login_session_ttl = 300
+
+def _cloud189_check_session_detail(session: requests.Session) -> Tuple[bool, str]:
+    try:
+        def _snip(s: str, n: int = 160) -> str:
+            try:
+                t = (s or "").strip().replace("\r", " ").replace("\n", " ")
+                return t[:n]
+            except Exception:
+                return ""
+
+        resp = session.get("https://cloud.189.cn/v2/getUserLevelInfo.action", timeout=15)
+        text = resp.text or ""
+        if resp.status_code != 200:
+            if resp.status_code in (400, 401, 403):
+                r2 = None
+                r3 = None
+                try:
+                    r2 = session.get("https://cloud.189.cn/v2/getLoginedInfos.action", timeout=15)
+                    if r2.status_code == 200:
+                        j2 = r2.json()
+                        if isinstance(j2, dict) and j2.get("userId"):
+                            return True, ""
+                except Exception:
+                    pass
+                try:
+                    r3 = session.get(
+                        "https://cloud.189.cn/api/portal/listFiles.action",
+                        params={"fileId": "-11", "noCache": str(time.time())},
+                        timeout=15,
+                    )
+                    if r3.status_code == 200:
+                        j3 = r3.json()
+                        if isinstance(j3, dict) and not j3.get("errorCode"):
+                            return True, ""
+                except Exception:
+                    pass
+
+                parts = [f"http={resp.status_code}", f"userLevel={_snip(text)}"]
+                try:
+                    if r2 is not None:
+                        parts.append(f"logined={r2.status_code}:{_snip(r2.text or '')}")
+                except Exception:
+                    pass
+                try:
+                    if r3 is not None:
+                        parts.append(f"portal={r3.status_code}:{_snip(r3.text or '')}")
+                except Exception:
+                    pass
+                return False, " ".join(parts)
+            return False, f"http={resp.status_code} body={_snip(text)}"
+        if "InvalidSessionKey" in text:
+            try:
+                j = resp.json()
+                if isinstance(j, dict) and j.get("errorMsg"):
+                    return False, str(j.get("errorMsg"))
+                if isinstance(j, dict) and j.get("errorCode"):
+                    return False, str(j.get("errorCode"))
+            except Exception:
+                pass
+            return False, "InvalidSessionKey"
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def _cloud189_finalize_login_and_get_cookies(session: requests.Session, to_url: str = "") -> dict[str, str]:
+    def _extract_next_url(html: str) -> str:
+        if not html:
+            return ""
+        patterns = [
+            r'http-equiv=[\'"]refresh[\'"][^>]*content=[\'"][^>]*url=([^\'">\\s;]+)',
+            r'(?:location\.href|window\.location|top\.location)\s*=\s*[\'"]([^\'"]+)[\'"]',
+            r'location\.replace\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
+            r'(https?://[^\s\'"]+)',
+        ]
+        for p in patterns:
+            m = re.search(p, html, re.I)
+            if m:
+                return (m.group(1) or "").strip()
+        return ""
+
+    def _follow(u: str, max_hops: int = 3):
+        cur = (u or "").strip()
+        visited = set()
+        for _ in range(max_hops):
+            if not cur or cur in visited:
+                return
+            visited.add(cur)
+            resp = session.get(cur, timeout=15, allow_redirects=True)
+            try:
+                ct = (resp.headers.get("Content-Type") or "").lower()
+            except Exception:
+                ct = ""
+            if "text/html" not in ct:
+                return
+            nxt = _extract_next_url(resp.text or "")
+            if not nxt:
+                return
+            nxt = nxt.replace("&amp;", "&")
+            try:
+                if nxt.startswith("//"):
+                    nxt = "https:" + nxt
+                elif nxt.startswith("/"):
+                    nxt = urllib.parse.urljoin(cur, nxt)
+            except Exception:
+                pass
+            cur = nxt
+
+    try:
+        if to_url:
+            _follow(to_url)
+    except Exception:
+        pass
+    try:
+        _follow("https://cloud.189.cn/main.action")
+    except Exception:
+        pass
+    try:
+        return session.cookies.get_dict()
+    except Exception:
+        return {}
 
 # 数据同步模块
 sync_db = None
@@ -1124,7 +1251,7 @@ def get_task_suggestions():
         search_results = []
         with ThreadPoolExecutor(max_workers=3) as executor:
             features = []
-            features.append(executor.submit(net_search))
+            # features.append(executor.submit(net_search))
             features.append(executor.submit(cs_search))
             features.append(executor.submit(ps_search))
             for future in as_completed(features):
@@ -1253,16 +1380,17 @@ def get_share_detail():
             try:
                 drive_type_key = getattr(preview_account, 'DRIVE_TYPE', 'quark')
                 cookie_key = getattr(preview_account, 'cookie', '')
+                use_cache = drive_type_key not in ("123pan", "cloud189")
 
                 # 优先读缓存（不阻塞）
                 fid = preview_account.savepath_fid.get(savepath_normalized)
                 if not fid:
                     fids_cache_key = make_cache_key(drive_type_key, cookie_key, 'fids', savepath_normalized)
-                    fid = get_cached_fids(fids_cache_key)
+                    fid = get_cached_fids(fids_cache_key) if use_cache else None
 
                 if fid:
                     lsdir_cache_key = make_cache_key(drive_type_key, cookie_key, 'lsdir', str(fid))
-                    cached_ls = get_cached_lsdir(lsdir_cache_key)
+                    cached_ls = get_cached_lsdir(lsdir_cache_key) if use_cache else None
                     if cached_ls is not None:
                         logger.debug(f"[fetch_dir] 缓存命中，{len(cached_ls)} 个文件")
                         return cached_ls
@@ -1273,14 +1401,16 @@ def get_share_detail():
                     if get_fids_result:
                         fid = get_fids_result[0]["fid"]
                         fids_cache_key = make_cache_key(drive_type_key, cookie_key, 'fids', savepath_normalized)
-                        set_cached_fids(fids_cache_key, fid)
+                        if use_cache:
+                            set_cached_fids(fids_cache_key, fid)
 
                 if fid:
                     ls_result = preview_account.ls_dir(fid, max_items=2000)
                     if ls_result and "data" in ls_result:
                         dir_list = ls_result["data"].get("list", [])
                         lsdir_cache_key = make_cache_key(drive_type_key, cookie_key, 'lsdir', str(fid))
-                        set_cached_lsdir(lsdir_cache_key, dir_list)
+                        if use_cache:
+                            set_cached_lsdir(lsdir_cache_key, dir_list)
                         logger.debug(f"[fetch_dir] API 获取目录，{len(dir_list)} 个文件")
                         return dir_list
             except Exception as e:
@@ -1538,6 +1668,7 @@ def get_savepath_detail():
         paths = []
         drive_type_key = getattr(account, 'DRIVE_TYPE', 'quark')
         cookie_key = getattr(account, 'cookie', '')
+        use_cache = drive_type_key not in ("123pan", "cloud189")
 
         if path := request.args.get("path"):
             path = re.sub(r"/+", "/", path)
@@ -1570,7 +1701,7 @@ def get_savepath_detail():
                 else:
                     # 尝试应用级缓存
                     fids_cache_key = make_cache_key(drive_type_key, cookie_key, 'fids', full_path)
-                    cached_fid = get_cached_fids(fids_cache_key)
+                    cached_fid = get_cached_fids(fids_cache_key) if use_cache else None
 
                     if cached_fid:
                         fid = cached_fid
@@ -1598,7 +1729,8 @@ def get_savepath_detail():
 
                         if get_fids:
                             fid = get_fids[-1]["fid"]
-                            set_cached_fids(fids_cache_key, fid)
+                            if use_cache:
+                                set_cached_fids(fids_cache_key, fid)
                             paths = [
                                 {"fid": get_fid["fid"], "name": dir_name}
                                 for get_fid, dir_name in zip(get_fids, dir_names)
@@ -1620,15 +1752,21 @@ def get_savepath_detail():
 
         # ls_dir 结果走应用级缓存
         lsdir_cache_key = make_cache_key(drive_type_key, cookie_key, 'lsdir', str(fid))
-        cached_ls = None if drive_type_key == "123pan" else get_cached_lsdir(lsdir_cache_key)
+        cached_ls = get_cached_lsdir(lsdir_cache_key) if use_cache else None
         if cached_ls is not None:
             file_list_data = cached_ls
         else:
             ls_result = account.ls_dir(fid)
             if not ls_result or ls_result.get("code") not in (0, "0") or "data" not in ls_result:
-                return jsonify({"success": False, "data": {"error": "获取目录列表失败，请检查Cookie是否有效"}})
+                err = ""
+                try:
+                    err = (ls_result or {}).get("message") or ""
+                except Exception:
+                    err = ""
+                msg = err or "获取目录列表失败，请检查Cookie是否有效"
+                return jsonify({"success": False, "data": {"error": msg}})
             file_list_data = ls_result["data"].get("list", [])
-            if drive_type_key != "123pan":
+            if use_cache:
                 set_cached_lsdir(lsdir_cache_key, file_list_data)
 
         file_list = {
@@ -1645,19 +1783,34 @@ def get_savepath_detail():
 @app.route("/delete_file", methods=["POST"])
 def delete_file():
     if not is_login():
-        return jsonify({"success": False, "message": "未登录"})
+        return jsonify({"code": 1, "message": "未登录"})
+    if not MULTI_DRIVE_SUPPORT:
+        return jsonify({"code": 1, "message": "多网盘支持未启用"})
     
     # 支持通过参数指定账户
     account_name = request.json.get("account_name", "")
-    account, _ = get_account_by_name(account_name)
+    drive_type = request.json.get("drive_type", "")
+    with _config_lock:
+        _reload_config_data()
+
+    account = None
+    if account_name and account_name != "auto":
+        account, _ = get_account_by_name(account_name)
+    if not account and drive_type:
+        ck = _get_default_account_cookie(drive_type)
+        if ck:
+            try:
+                account = AdapterFactory.create_adapter(drive_type, ck, 0)
+            except Exception:
+                account = None
     
     if not account:
-        return jsonify({"success": False, "message": "未配置有效的网盘账户"})
+        return jsonify({"code": 1, "message": "未配置有效的网盘账户"})
     
     if fid := request.json.get("fid"):
         response = account.delete([fid])
     else:
-        response = {"success": False, "message": "缺失必要字段: fid"}
+        response = {"code": 1, "message": "缺失必要字段: fid"}
     return jsonify(response)
 
 
@@ -1814,6 +1967,429 @@ def xunlei_token_refresh():
             return jsonify({"success": False, "message": "Token 刷新失败，请检查 refresh_token 是否有效"})
     except Exception as e:
         logging.error(f"[Xunlei] Token 刷新失败: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/cloud189/login/start", methods=["POST"])
+def cloud189_login_start():
+    global config_data
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not MULTI_DRIVE_SUPPORT:
+        return jsonify({"success": False, "message": "多网盘支持未启用"})
+
+    account_name = (request.json or {}).get("account_name", "")
+
+    with _cloud189_login_sessions_lock:
+        now = time.time()
+        expired = [k for k, v in _cloud189_login_sessions.items() if v.get("expires_at", 0) <= now]
+        for k in expired:
+            _cloud189_login_sessions.pop(k, None)
+
+    with _config_lock:
+        config_data = _reload_config_data()
+    accounts = config_data.get("accounts", []) if isinstance(config_data, dict) else []
+    target_account = None
+    for acc in accounts:
+        if not isinstance(acc, dict):
+            continue
+        if acc.get("drive_type") != "cloud189":
+            continue
+        if account_name and acc.get("name") != account_name:
+            continue
+        target_account = acc
+        break
+    if not target_account:
+        return jsonify({"success": False, "message": "未找到天翼云盘账户"})
+
+    try:
+        from adapters.cloud189_adapter import Cloud189Adapter, Cloud189CaptchaRequired, Cloud189SecondValidRequired
+        adapter = Cloud189Adapter(target_account.get("cookie", "") or "", 0)
+        if not adapter._user_name or not adapter._password:
+            return jsonify({"success": False, "message": "请先在 cookie 参数串中填写 username 与 password"})
+
+        try:
+            adapter._login_by_username_password(adapter._user_name, adapter._password, "")
+        except Cloud189CaptchaRequired as ce:
+            login_session_id = uuid.uuid4().hex
+            img_b64 = base64.b64encode(ce.image_bytes or b"").decode("utf-8")
+            with _cloud189_login_sessions_lock:
+                _cloud189_login_sessions[login_session_id] = {
+                    "expires_at": time.time() + _cloud189_login_session_ttl,
+                    "account_name": target_account.get("name", ""),
+                    "cookie": target_account.get("cookie", "") or "",
+                    "username": adapter._user_name,
+                    "password": adapter._password,
+                    "login_params": dict(ce.context or {}),
+                    "session": adapter._session,
+                }
+            return jsonify(
+                {
+                    "success": False,
+                    "require_captcha": True,
+                    "data": {"login_session_id": login_session_id, "captcha_image_base64": img_b64},
+                    "message": "需要验证码",
+                }
+            )
+        except Cloud189SecondValidRequired as se:
+            login_session_id = uuid.uuid4().hex
+            ctx = se.context or {}
+            with _cloud189_login_sessions_lock:
+                _cloud189_login_sessions[login_session_id] = {
+                    "expires_at": time.time() + _cloud189_login_session_ttl,
+                    "account_name": target_account.get("name", ""),
+                    "cookie": target_account.get("cookie", "") or "",
+                    "username": adapter._user_name,
+                    "password": adapter._password,
+                    "login_params": dict(ctx),
+                    "apToken": ctx.get("apToken") or ctx.get("ap_token") or "",
+                    "mobile": ctx.get("mobile") or "",
+                    "second_mode": ctx.get("second_mode") or "",
+                    "session": adapter._session,
+                }
+            return jsonify(
+                {
+                    "success": False,
+                    "require_second_valid": True,
+                    "data": {
+                        "login_session_id": login_session_id,
+                        "show_name": ctx.get("showName") or "",
+                        "is_system": ctx.get("isSystem"),
+                        "mode": ctx.get("second_mode") or "",
+                    },
+                    "message": str(se),
+                }
+            )
+            cookies = _cloud189_finalize_login_and_get_cookies(adapter._session, to_url)
+        ok, reason = _cloud189_check_session_detail(adapter._session)
+        if not ok:
+                return jsonify({"success": False, "message": f"二次校验后登录态无效({reason})，请重试。"})
+        sson = cookies.get("SSON") or ""
+        if not sson:
+            return jsonify({"success": False, "message": "登录成功但未获取到 SSON"})
+        adapter._cookie_kv["ssoncookie"] = sson
+        adapter._cookie_kv["SSON"] = sson
+        for k in ("OPENINFO", "DEVICEID", "GUID", "LT", "JSESSIONID", "pageOp", "GRAYNUMBER"):
+            v = cookies.get(k) or ""
+            if v:
+                adapter._cookie_kv[k] = v
+        try:
+            adapter._cookie_kv["cookiejar"] = adapter._export_cookiejar_b64()
+        except Exception:
+            pass
+        new_cookie = adapter._cookie_kv_to_str(adapter._cookie_kv)
+
+        with _config_lock:
+            cfg = _reload_config_data()
+            accounts2 = cfg.get("accounts", []) if isinstance(cfg, dict) else []
+            for acc in accounts2:
+                if not isinstance(acc, dict):
+                    continue
+                if acc.get("drive_type") != "cloud189":
+                    continue
+                if acc.get("name") != target_account.get("name"):
+                    continue
+                acc["cookie"] = new_cookie
+                acc["_token_updated_at"] = time.time()
+                break
+            cfg["accounts"] = accounts2
+            cfg = _sanitize_config_data(cfg)
+            _save_config_to_db(cfg)
+            config_data = cfg
+
+        AdapterFactory.clear_cache()
+        invalidate_all()
+        return jsonify({"success": True, "message": "登录成功", "data": {"ssoncookie": sson}})
+    except Exception as e:
+        logging.error(f"[cloud189] login start failed: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/cloud189/second_valid/submit_password", methods=["POST"])
+def cloud189_second_valid_submit_password():
+    global config_data
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not MULTI_DRIVE_SUPPORT:
+        return jsonify({"success": False, "message": "多网盘支持未启用"})
+
+    body = request.json or {}
+    login_session_id = (body.get("login_session_id") or "").strip()
+    password = (body.get("password") or "").strip()
+    if not login_session_id or not password:
+        return jsonify({"success": False, "message": "缺少参数"})
+
+    with _cloud189_login_sessions_lock:
+        sess = _cloud189_login_sessions.get(login_session_id)
+        if not sess:
+            return jsonify({"success": False, "message": "二次校验会话已失效，请重新登录"})
+        if sess.get("expires_at", 0) <= time.time():
+            _cloud189_login_sessions.pop(login_session_id, None)
+            return jsonify({"success": False, "message": "二次校验会话已过期，请重新登录"})
+
+    try:
+        from adapters.cloud189_adapter import Cloud189Adapter
+        adapter = Cloud189Adapter(sess.get("cookie", "") or "", 0)
+        if sess.get("session"):
+            adapter._session = sess.get("session")
+        login_params = sess.get("login_params", {}) or {}
+        ap_token = (sess.get("apToken") or "").strip()
+        username = sess.get("username", "") or ""
+
+        j = adapter._second_valid_submit_password(login_params, ap_token, username, password)
+        if isinstance(j, dict) and int(j.get("result", 1)) == 0:
+            to_url = j.get("toUrl") or ""
+            cookies = _cloud189_finalize_login_and_get_cookies(adapter._session, to_url)
+            if not isinstance(cookies, dict) or not cookies:
+                return jsonify({"success": False, "message": "二次校验成功但未获取到 Cookie"})
+            sson = cookies.get("SSON") or ""
+            if sson:
+                adapter._cookie_kv["ssoncookie"] = sson
+                adapter._cookie_kv["SSON"] = sson
+            for k, v in cookies.items():
+                if k and v:
+                    adapter._cookie_kv[str(k)] = str(v)
+            try:
+                adapter._cookie_kv["cookiejar"] = adapter._export_cookiejar_b64()
+            except Exception:
+                pass
+            new_cookie = adapter._cookie_kv_to_str(adapter._cookie_kv)
+
+            with _config_lock:
+                cfg = _reload_config_data()
+                accounts = cfg.get("accounts", []) if isinstance(cfg, dict) else []
+                for acc in accounts:
+                    if not isinstance(acc, dict):
+                        continue
+                    if acc.get("drive_type") != "cloud189":
+                        continue
+                    if acc.get("name") != (sess.get("account_name") or ""):
+                        continue
+                    acc["cookie"] = new_cookie
+                    acc["_token_updated_at"] = time.time()
+                    break
+                cfg["accounts"] = accounts
+                cfg = _sanitize_config_data(cfg)
+                _save_config_to_db(cfg)
+                config_data = cfg
+
+            with _cloud189_login_sessions_lock:
+                _cloud189_login_sessions.pop(login_session_id, None)
+
+            AdapterFactory.clear_cache()
+            invalidate_all()
+            return jsonify({"success": True, "message": "二次校验成功", "data": {"ssoncookie": sson}})
+
+        msg = (j or {}).get("msg") if isinstance(j, dict) else ""
+        return jsonify({"success": False, "message": msg or "二次校验失败"})
+    except Exception as e:
+        logging.error(f"[cloud189] second valid failed: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/cloud189/second_valid/send_sms", methods=["POST"])
+def cloud189_second_valid_send_sms():
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not MULTI_DRIVE_SUPPORT:
+        return jsonify({"success": False, "message": "多网盘支持未启用"})
+
+    body = request.json or {}
+    login_session_id = (body.get("login_session_id") or "").strip()
+    if not login_session_id:
+        return jsonify({"success": False, "message": "缺少参数"})
+
+    with _cloud189_login_sessions_lock:
+        sess = _cloud189_login_sessions.get(login_session_id)
+        if not sess:
+            return jsonify({"success": False, "message": "二次校验会话已失效，请重新登录"})
+        if sess.get("expires_at", 0) <= time.time():
+            _cloud189_login_sessions.pop(login_session_id, None)
+            return jsonify({"success": False, "message": "二次校验会话已过期，请重新登录"})
+
+    try:
+        from adapters.cloud189_adapter import Cloud189Adapter
+        adapter = Cloud189Adapter(sess.get("cookie", "") or "", 0)
+        if sess.get("session"):
+            adapter._session = sess.get("session")
+        mobile = (sess.get("mobile") or "").strip()
+        if not mobile:
+            return jsonify({"success": False, "message": "未获取到手机号，无法发送验证码"})
+        j = adapter._second_valid_send_sms(sess.get("login_params", {}) or {}, mobile)
+        if isinstance(j, dict) and int(j.get("result", 1)) == 0:
+            return jsonify({"success": True, "message": "验证码已发送"})
+        msg = (j or {}).get("msg") if isinstance(j, dict) else ""
+        return jsonify({"success": False, "message": msg or "发送验证码失败"})
+    except Exception as e:
+        logging.error(f"[cloud189] second valid send sms failed: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/cloud189/second_valid/submit_sms", methods=["POST"])
+def cloud189_second_valid_submit_sms():
+    global config_data
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not MULTI_DRIVE_SUPPORT:
+        return jsonify({"success": False, "message": "多网盘支持未启用"})
+
+    body = request.json or {}
+    login_session_id = (body.get("login_session_id") or "").strip()
+    sms_code = (body.get("sms_code") or "").strip()
+    if not login_session_id or not sms_code:
+        return jsonify({"success": False, "message": "缺少参数"})
+
+    with _cloud189_login_sessions_lock:
+        sess = _cloud189_login_sessions.get(login_session_id)
+        if not sess:
+            return jsonify({"success": False, "message": "二次校验会话已失效，请重新登录"})
+        if sess.get("expires_at", 0) <= time.time():
+            _cloud189_login_sessions.pop(login_session_id, None)
+            return jsonify({"success": False, "message": "二次校验会话已过期，请重新登录"})
+
+    try:
+        from adapters.cloud189_adapter import Cloud189Adapter
+        adapter = Cloud189Adapter(sess.get("cookie", "") or "", 0)
+        if sess.get("session"):
+            adapter._session = sess.get("session")
+        login_params = sess.get("login_params", {}) or {}
+        username = sess.get("username", "") or ""
+        mobile = (sess.get("mobile") or "").strip()
+        if not mobile:
+            return jsonify({"success": False, "message": "未获取到手机号，无法提交验证码"})
+        j = adapter._second_valid_submit_sms(login_params, mobile, username, sms_code)
+        if isinstance(j, dict) and int(j.get("result", 1)) == 0:
+            to_url = j.get("toUrl") or ""
+            cookies = _cloud189_finalize_login_and_get_cookies(adapter._session, to_url)
+            if not isinstance(cookies, dict) or not cookies:
+                return jsonify({"success": False, "message": "二次校验成功但未获取到 Cookie"})
+            sson = cookies.get("SSON") or ""
+            if sson:
+                adapter._cookie_kv["ssoncookie"] = sson
+                adapter._cookie_kv["SSON"] = sson
+            for k, v in cookies.items():
+                if k and v:
+                    adapter._cookie_kv[str(k)] = str(v)
+            try:
+                adapter._cookie_kv["cookiejar"] = adapter._export_cookiejar_b64()
+            except Exception:
+                pass
+            new_cookie = adapter._cookie_kv_to_str(adapter._cookie_kv)
+
+            with _config_lock:
+                cfg = _reload_config_data()
+                accounts = cfg.get("accounts", []) if isinstance(cfg, dict) else []
+                for acc in accounts:
+                    if not isinstance(acc, dict):
+                        continue
+                    if acc.get("drive_type") != "cloud189":
+                        continue
+                    if acc.get("name") != (sess.get("account_name") or ""):
+                        continue
+                    acc["cookie"] = new_cookie
+                    acc["_token_updated_at"] = time.time()
+                    break
+                cfg["accounts"] = accounts
+                cfg = _sanitize_config_data(cfg)
+                _save_config_to_db(cfg)
+                config_data = cfg
+
+            with _cloud189_login_sessions_lock:
+                _cloud189_login_sessions.pop(login_session_id, None)
+
+            AdapterFactory.clear_cache()
+            invalidate_all()
+            return jsonify({"success": True, "message": "二次校验成功", "data": {"ssoncookie": sson}})
+
+        msg = (j or {}).get("msg") if isinstance(j, dict) else ""
+        return jsonify({"success": False, "message": msg or "二次校验失败"})
+    except Exception as e:
+        logging.error(f"[cloud189] second valid submit sms failed: {e}")
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/cloud189/login/submit", methods=["POST"])
+def cloud189_login_submit():
+    global config_data
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    if not MULTI_DRIVE_SUPPORT:
+        return jsonify({"success": False, "message": "多网盘支持未启用"})
+
+    body = request.json or {}
+    login_session_id = (body.get("login_session_id") or "").strip()
+    captcha_code = (body.get("captcha_code") or "").strip()
+    if not login_session_id or not captcha_code:
+        return jsonify({"success": False, "message": "缺少参数"})
+
+    with _cloud189_login_sessions_lock:
+        sess = _cloud189_login_sessions.get(login_session_id)
+        if not sess:
+            return jsonify({"success": False, "message": "验证码会话已失效，请重新获取"})
+        if sess.get("expires_at", 0) <= time.time():
+            _cloud189_login_sessions.pop(login_session_id, None)
+            return jsonify({"success": False, "message": "验证码会话已过期，请重新获取"})
+
+    try:
+        from adapters.cloud189_adapter import Cloud189Adapter
+        adapter = Cloud189Adapter(sess.get("cookie", "") or "", 0)
+        if sess.get("session"):
+            adapter._session = sess.get("session")
+        j = adapter._login_submit(
+            sess.get("username", "") or "",
+            sess.get("password", "") or "",
+            captcha_code,
+            sess.get("login_params", {}) or {},
+        )
+        msg = j.get("msg") or ""
+        if msg != "登录成功":
+            return jsonify({"success": False, "message": msg or "登录失败"})
+        to_url = j.get("toUrl") or ""
+        cookies = _cloud189_finalize_login_and_get_cookies(adapter._session, to_url)
+        ok, reason = _cloud189_check_session_detail(adapter._session)
+        if not ok:
+            return jsonify({"success": False, "message": f"登录态无效({reason})，请重试。"})
+        sson = cookies.get("SSON") or ""
+        if not sson:
+            return jsonify({"success": False, "message": "登录成功但未获取到 SSON"})
+        adapter._cookie_kv["ssoncookie"] = sson
+        adapter._cookie_kv["SSON"] = sson
+        for k in ("OPENINFO", "DEVICEID", "GUID", "LT", "JSESSIONID", "pageOp", "GRAYNUMBER"):
+            v = cookies.get(k) or ""
+            if v:
+                adapter._cookie_kv[k] = v
+        try:
+            adapter._cookie_kv["cookiejar"] = adapter._export_cookiejar_b64()
+        except Exception:
+            pass
+        new_cookie = adapter._cookie_kv_to_str(adapter._cookie_kv)
+
+        with _config_lock:
+            cfg = _reload_config_data()
+            accounts = cfg.get("accounts", []) if isinstance(cfg, dict) else []
+            for acc in accounts:
+                if not isinstance(acc, dict):
+                    continue
+                if acc.get("drive_type") != "cloud189":
+                    continue
+                if acc.get("name") != (sess.get("account_name") or ""):
+                    continue
+                acc["cookie"] = new_cookie
+                acc["_token_updated_at"] = time.time()
+                break
+            cfg["accounts"] = accounts
+            cfg = _sanitize_config_data(cfg)
+            _save_config_to_db(cfg)
+            config_data = cfg
+
+        with _cloud189_login_sessions_lock:
+            _cloud189_login_sessions.pop(login_session_id, None)
+
+        AdapterFactory.clear_cache()
+        invalidate_all()
+        return jsonify({"success": True, "message": "登录成功", "data": {"ssoncookie": sson}})
+    except Exception as e:
+        logging.error(f"[cloud189] login submit failed: {e}")
         return jsonify({"success": False, "message": str(e)})
 
 
@@ -2686,6 +3262,14 @@ def init():
             logging.info(">>> 123网盘 token 保存器已初始化")
         except Exception as e:
             logging.warning(f">>> 初始化123网盘 token 保存器失败: {e}")
+
+    if MULTI_DRIVE_SUPPORT:
+        try:
+            from adapters.cloud189_adapter import set_config_saver as cloud189_set_config_saver
+            cloud189_set_config_saver(_make_token_saver("cloud189"))
+            logging.info(">>> 天翼云盘 token 保存器已初始化")
+        except Exception as e:
+            logging.warning(f">>> 初始化天翼云盘 token 保存器失败: {e}")
 
     if sync_db:
         try:

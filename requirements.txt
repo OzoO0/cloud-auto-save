@@ -4,3 +4,4 @@ requests
 treelib
 natsort
 cachetools
+rsa

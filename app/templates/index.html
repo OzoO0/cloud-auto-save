@@ -63,6 +63,11 @@
                   <i class="bi bi-info-circle"></i> 暂无多网盘账户配置。如需使用多网盘功能，请点击 + 添加账户。
                   <br><small>提示：至少添加一个启用的账户，并设置为默认账户。</small>
                 </div>
+                <div class="alert alert-warning">
+                  <i class="bi bi-exclamation-triangle"></i>
+                  <strong>天翼云盘（cloud189）提示：</strong>
+                  填写账号信息后，请务必点击账户右侧“验证码登录/盾牌按钮”完成登录（可能需要验证码/短信二次校验），系统会自动回写并保存 <strong>ssoncookie</strong>。看到“登录成功”后，才能正常转存/选择目录。
+                </div>
                 <div v-for="(account, index) in formData.accounts" :key="'account_'+index" class="card mb-2">
                   <div class="card-body p-2">
                     <div class="row align-items-center">
@@ -86,7 +91,7 @@
                       <div class="col-md-5">
                         <div class="input-group input-group-sm">
                           <input type="text" v-model="account.cookie" class="form-control" 
-                                 :placeholder="account.drive_type === 'aliyun' ? 'refresh_token' : (account.drive_type === 'xunlei' ? 'refresh_token' : (account.drive_type === '123pan' ? 'name=账号名;username=手机号或邮箱;password=登录密码;protocol=web' : 'Cookie'))"
+                                 :placeholder="account.drive_type === 'aliyun' ? 'refresh_token' : (account.drive_type === 'xunlei' ? 'refresh_token' : (account.drive_type === '123pan' ? 'name=账号名;username=手机号或邮箱;password=登录密码;protocol=web' : (account.drive_type === 'cloud189' ? 'name=账号名;username=手机号或邮箱;password=登录密码;ssoncookie=;debug=0' : 'Cookie')))"
                                  :disabled="isTokenProtectedAccount(account)"
                                  :title="isTokenProtectedAccount(account) ? 'Token 受保护，点击编辑按钮修改' : ''">
                           <div class="input-group-append" v-if="account.drive_type === '123pan'">
@@ -94,6 +99,16 @@
                                     data-toggle="tooltip" data-placement="top"
                                     title="支持格式：name=...;username=...;password=...;authorization=Bearer ...（可选）;protocol=web|android;debug=1（可选）">
                               <i class="bi bi-info-circle"></i>
+                            </button>
+                          </div>
+                          <div class="input-group-append" v-if="account.drive_type === 'cloud189'">
+                            <button type="button" class="btn btn-outline-secondary"
+                                    data-toggle="tooltip" data-placement="top"
+                                    title="支持格式：name=...;username=...;password=...;ssoncookie=...（会保存为 COOKIE_LOGIN_USER）;debug=1（可选）。填写账号后需要点击右侧盾牌按钮完成验证码/短信二次校验并回写 Cookie，之后才能正常使用目录选择与转存。">
+                              <i class="bi bi-info-circle"></i>
+                            </button>
+                            <button type="button" class="btn btn-outline-primary" @click="cloud189StartLogin(index)" :disabled="cloud189LoginLoading[index]" title="验证码登录/二次校验（自动回写 COOKIE_LOGIN_USER）">
+                              <i class="bi" :class="cloud189LoginLoading[index] ? 'bi-arrow-repeat spin' : 'bi-shield-lock'"></i>
                             </button>
                           </div>
                           <div class="input-group-append" v-if="account.drive_type === 'aliyun'">
@@ -114,6 +129,18 @@
                             <button type="button" class="btn btn-outline-success" @click="refreshToken(index, 'xunlei')" title="刷新 Token" :disabled="tokenRefreshing[index]">
                               <i class="bi" :class="tokenRefreshing[index] ? 'bi-arrow-repeat spin' : 'bi-arrow-repeat'"></i>
                             </button>
+                          </div>
+                        </div>
+                          <div v-if="account.drive_type === 'cloud189'">
+                          <div v-if="!(account.cookie && (/COOKIE_LOGIN_USER\\s*=\\s*[^;]+/i.test(account.cookie) || /ssoncookie\\s*=\\s*[^;]+/i.test(account.cookie)))" class="alert alert-warning py-1 mt-1 mb-0">
+                            <small>
+                              <strong>需要先登录：</strong>填写 username/password 后，点击右侧“验证码登录/盾牌按钮”，按提示完成验证码/短信二次校验并自动写入 COOKIE_LOGIN_USER（或 ssoncookie）。未写入前，目录选择/转存会失败。
+                            </small>
+                          </div>
+                          <div v-else class="alert alert-success py-1 mt-1 mb-0">
+                            <small>
+                              <strong>已检测到登录 Cookie：</strong>可以正常使用；如后续失效，再点右侧盾牌按钮重新登录并回写。
+                            </small>
                           </div>
                         </div>
                       </div>
@@ -202,6 +229,12 @@
                     <template v-for="(value, key) in plugin" :key="key">
                       <div v-if="key.startsWith('tips_')">
                         <div class="alert alert-warning" role="alert" v-html="value"></div>
+                      </div>
+                      <div v-else-if="typeof value === 'boolean'" class="form-group row mb-2">
+                        <label class="col-sm-2 col-form-label">{{ key }}</label>
+                        <div class="col-sm-10 d-flex align-items-center">
+                          <input type="checkbox" class="form-check-input ml-0 mt-0" v-model="formData.plugins[pluginName][key]">
+                        </div>
                       </div>
                       <div v-else class="form-group row">
                         <label class="col-sm-2 col-form-label" v-html="key"></label>
@@ -403,9 +436,12 @@
                       <div class="input-group">
                         <input type="text" name="taskname[]" class="form-control" v-model="task.taskname" placeholder="必填" @focus="smart_param.showSuggestions=true;focusTaskname(index, task)" @input="changeTaskname(index, task)">
                         <div class="dropdown-menu show task-suggestions" v-if="smart_param.showSuggestions && smart_param.taskSuggestions.success && smart_param.index === index">
-                          <div class="dropdown-item text-muted text-center" style="font-size:12px;">{{ smart_param.taskSuggestions.message ? smart_param.taskSuggestions.message : smart_param.taskSuggestions.data.length ? `以下资源来自网络搜索，请自行辨识，如有侵权请联系资源方` : "未搜索到资源" }}</div>
-                          <div v-for="suggestion in smart_param.taskSuggestions.data" :key="suggestion.taskname" class="dropdown-item cursor-pointer" @click.prevent="selectSuggestion(index, suggestion)" style="font-size: 12px;" :title="suggestion.content">
-                            <span v-html="suggestion.verify ? '✅': '❔'"></span> {{ suggestion.taskname }}
+                           <div class="dropdown-item text-muted text-center" style="font-size:12px;">
+                            <span v-if="smart_param.isVerifying" class="mr-1"><i class="spinner-border spinner-border-sm" role="status"></i> 正在检查链接有效性...</span>
+                            <span v-else>{{ smart_param.taskSuggestions.message ? smart_param.taskSuggestions.message : smart_param.taskSuggestions.data.length ? `以下资源来自网络搜索，请自行辨识，如有侵权请联系资源方` : "未搜索到资源" }}</span>
+                          </div>
+                          <div v-for="(suggestion, sIndex) in smart_param.taskSuggestions.data" :key="suggestion.taskname" class="dropdown-item cursor-pointer" @click.prevent="selectSuggestion(index, suggestion)" style="font-size: 12px;" :title="suggestion.content">
+                            <span>{{ suggestion.verify === true ? '✅' : suggestion.verify === false ? '❌' : '❔' }}</span> {{ suggestion.taskname }}
                             <small class="text-muted">
                               <a :href="suggestion.shareurl" target="_blank" @click.stop>{{ suggestion.shareurl }}</a>
                             </small>
@@ -965,7 +1001,7 @@
                     </div>
                   </div>
                   <div class="file-list-trailing">
-                    <a v-if="!fileSelect.previewRegex && !fileSelect.selectShare" class="file-list-action" href="#" @click.stop.prevent="deleteFile(file.fid, file.file_name, file.dir)">删除</a>
+                    <a v-if="!fileSelect.previewRegex && !fileSelect.selectShare" class="file-list-action" href="#" :class="fileSelect.deleting ? 'disabled text-muted' : ''" @click.stop.prevent="deleteFile(file.fid, file.file_name, file.dir)">删除</a>
                     <i v-else-if="fileSelect.selectDir && file.dir" class="bi bi-chevron-right file-list-chevron"></i>
                   </div>
                 </div>
@@ -1002,7 +1038,7 @@
                       <td v-if="file.dir">{{ file.include_items }}项</td>
                       <td v-else>{{file.size | size}}</td>
                       <td>{{file.updated_at | ts2date}}</td>
-                      <td v-if="!fileSelect.selectShare"><a class="cursor-pointer text-muted" @click.stop.prevent="deleteFile(file.fid, file.file_name, file.dir)">删除</a></td>
+                      <td v-if="!fileSelect.selectShare"><a class="cursor-pointer text-muted" :class="fileSelect.deleting ? 'disabled text-muted' : ''" @click.stop.prevent="deleteFile(file.fid, file.file_name, file.dir)">删除</a></td>
                     </template>
                   </tr>
                 </tbody>
@@ -1086,6 +1122,96 @@
             <button type="button" class="btn btn-primary btn-sm" @click="saveManualToken" :disabled="!manualTokenEdit.newToken || manualTokenEdit.saving">
               <span v-if="manualTokenEdit.saving"><i class="bi bi-arrow-repeat spin"></i> 保存中...</span>
               <span v-else>保存</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 天翼云盘验证码登录 -->
+    <div class="modal" tabindex="-1" id="cloud189CaptchaModal">
+      <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">
+              <i class="bi bi-cloud"></i> 天翼云盘验证码登录
+            </h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body text-center">
+            <div v-if="cloud189Captcha.loading" class="py-3">
+              <div class="spinner-border text-primary" role="status"></div>
+              <p class="mt-2 mb-0">正在获取验证码...</p>
+            </div>
+            <div v-else>
+              <div v-if="cloud189Captcha.error" class="alert alert-danger text-left">
+                {{ cloud189Captcha.error }}
+              </div>
+              <img v-if="cloud189Captcha.captchaImageBase64" :src="'data:image/png;base64,' + cloud189Captcha.captchaImageBase64" alt="验证码" style="max-width: 100%; height: auto;" loading="lazy" decoding="async">
+              <input type="text" v-model="cloud189Captcha.captchaCode" class="form-control mt-2" placeholder="请输入验证码" autocomplete="off">
+              <small class="text-muted d-block mt-2">提交成功后将自动回写 ssoncookie</small>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary btn-sm" @click="cloud189SubmitCaptcha" :disabled="!cloud189Captcha.captchaCode || cloud189Captcha.submitting">
+              <span v-if="cloud189Captcha.submitting"><i class="bi bi-arrow-repeat spin"></i> 提交中...</span>
+              <span v-else>提交</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 天翼云盘二次设备校验 -->
+    <div class="modal" tabindex="-1" id="cloud189SecondValidModal">
+      <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">
+              <i class="bi bi-shield-check"></i> 天翼云盘二次校验
+            </h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body">
+            <div v-if="cloud189SecondValid.error" class="alert alert-danger">
+              {{ cloud189SecondValid.error }}
+            </div>
+            <div class="mb-2 text-muted">
+              {{ cloud189SecondValid.message || '为保障账号安全，需要进行二次设备校验。' }}
+            </div>
+            <div v-if="cloud189SecondValid.showName" class="mb-2">
+              <small class="text-muted">账号：</small> {{ cloud189SecondValid.showName }}
+            </div>
+            <div v-if="cloud189SecondValid.mode === 'sms'">
+              <div class="input-group">
+                <input type="text" v-model="cloud189SecondValid.smsCode" class="form-control" placeholder="请输入短信验证码" autocomplete="one-time-code">
+                <div class="input-group-append">
+                  <button class="btn btn-outline-primary" type="button" @click="cloud189SendSecondValidSms" :disabled="cloud189SecondValid.sendingSms">
+                    <span v-if="cloud189SecondValid.sendingSms"><i class="bi bi-arrow-repeat spin"></i></span>
+                    <span v-else>发送</span>
+                  </button>
+                </div>
+              </div>
+              <small class="text-muted d-block mt-2">提交成功后将自动回写 ssoncookie</small>
+            </div>
+            <div v-else>
+              <input type="password" v-model="cloud189SecondValid.password" class="form-control" placeholder="请再次输入登录密码" autocomplete="current-password">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal">取消</button>
+            <button v-if="cloud189SecondValid.mode === 'sms'" type="button" class="btn btn-primary btn-sm" @click="cloud189SubmitSecondValidSms" :disabled="!cloud189SecondValid.smsCode || cloud189SecondValid.submitting">
+              <span v-if="cloud189SecondValid.submitting"><i class="bi bi-arrow-repeat spin"></i> 提交中...</span>
+              <span v-else>提交</span>
+            </button>
+            <button v-else type="button" class="btn btn-primary btn-sm" @click="cloud189SubmitSecondValidPassword" :disabled="!cloud189SecondValid.password || cloud189SecondValid.submitting">
+              <span v-if="cloud189SecondValid.submitting"><i class="bi bi-arrow-repeat spin"></i> 提交中...</span>
+              <span v-else>提交</span>
             </button>
           </div>
         </div>
@@ -1414,7 +1540,8 @@
           { value: 'xunlei', label: '迅雷网盘', icon: 'bi-lightning-fill' },
           { value: 'aliyun', label: '阿里云盘', icon: 'bi-cloud-arrow-up' },
           { value: 'uc', label: 'UC网盘', icon: 'bi-folder' },
-          { value: '123pan', label: '123网盘', icon: 'bi-cloud-download' }
+          { value: '123pan', label: '123网盘', icon: 'bi-cloud-download' },
+          { value: 'cloud189', label: '天翼云盘', icon: 'bi-cloud' }
         ],
         formData: {
           accounts: [],  // 多网盘账户配置
@@ -1475,6 +1602,7 @@
           taskSuggestions: {},
           showSuggestions: false,
           isSearching: false,
+          isVerifying: false,
           searchTimer: null,
         },
         ui: {
@@ -1506,7 +1634,8 @@
           sortOrder: "desc",
           driveType: "quark",       // 当前显示的网盘类型
           tempAccountName: null,    // 临时账户名称（从URL自动检测）
-          error: undefined          // 错误信息
+          error: undefined,         // 错误信息
+          deleting: false
         },
         // 阿里云盘二维码登录
         aliyunQrcode: {
@@ -1530,6 +1659,30 @@
           newToken: '',
           currentMasked: '',
           saving: false,
+        },
+        cloud189LoginLoading: {},
+        cloud189Captcha: {
+          accountIndex: null,
+          accountName: '',
+          loginSessionId: '',
+          captchaImageBase64: '',
+          captchaCode: '',
+          loading: false,
+          submitting: false,
+          error: null,
+        },
+        cloud189SecondValid: {
+          accountIndex: null,
+          accountName: '',
+          loginSessionId: '',
+          showName: '',
+          message: '',
+          mode: '',
+          password: '',
+          smsCode: '',
+          sendingSms: false,
+          submitting: false,
+          error: null,
         },
         // ===== 数据同步 =====
         syncTasks: [],
@@ -2119,6 +2272,10 @@
             const name = account.name || '';
             account.cookie = `name=${name};username=;password=;protocol=web`;
           }
+          if (account.drive_type === 'cloud189' && (!account.cookie || !account.cookie.trim())) {
+            const name = account.name || '';
+            account.cookie = `name=${name};username=;password=;ssoncookie=;debug=0`;
+          }
         },
         // 记住账户原名称，用于修改时同步更新任务
         rememberAccountName(index, name) {
@@ -2313,7 +2470,7 @@
                     }
                     break;
                   }
-                  this.run_log += eventData.replace('<', '<\u200B') + '\n';
+                  this.run_log += eventData + '\n';
                   // 在更新 run_log 后将滚动条滚动到底部
                   this.$nextTick(() => {
                     const modalBody = document.querySelector('.modal-body');
@@ -2394,6 +2551,7 @@
             return;
           }
           this.smart_param.isSearching = true;
+          this.smart_param.taskSuggestions = {};
           this.smart_param.index = index;
           try {
             axios.get('/task_suggestions', {
@@ -2404,6 +2562,11 @@
             }).then(response => {
               this.smart_param.taskSuggestions = response.data;
               this.smart_param.showSuggestions = true;
+              this.smart_param.isSearching = false;
+              const data = response.data.data;
+              if (data && data.length > 0) {
+                this.verifyShareLinks(data);
+              }
             }).catch(error => {
               console.error('Error fetching suggestions:', error);
             }).finally(() => {
@@ -2414,6 +2577,36 @@
               error: "网络异常"
             };
           }
+        },
+        verifyShareLinks(data, concurrency = 10) {
+          this.smart_param.isVerifying = true;
+          let idx = 0;
+          const next = () => {
+            // 当发起下一次搜索时放弃本批验证
+            if (this.smart_param.isSearching || idx >= data.length) {
+              this.smart_param.isVerifying = false;
+              return;
+            }
+            const item = data[idx++];
+            // 只验证未知链接
+            if (item.verify !== undefined) { next(); return; }
+            axios.post('/get_share_detail', { shareurl: item.shareurl })
+              .then(res => {
+                if (this.smart_param.isSearching) return;
+                this.$set(item, 'verify', res.data.success);
+              }).catch(() => {
+                if (this.smart_param.isSearching) return;
+                this.$set(item, 'verify', false);
+              }).finally(() => {
+                if (this.smart_param.isSearching) {
+                  this.smart_param.isVerifying = false;
+                  return;
+                }
+                next();
+              });
+          };
+          const running = Math.min(concurrency, data.length);
+          for (let i = 0; i < running; i++) next();
         },
         selectSuggestion(index, suggestion) {
           this.smart_param.showSuggestions = false;
@@ -2443,18 +2636,29 @@
           }
         },
         deleteFile(fid, fname, isDir) {
-          if (fid != "" && confirm(`确认删除${isDir ? '目录' : '文件'} [${fname}] 吗？`))
+          if (this.fileSelect.deleting) return;
+          if (fid != "" && confirm(`确认删除${isDir ? '目录' : '文件'} [${fname}] 吗？`)) {
+            this.fileSelect.deleting = true;
+            this.modalLoading = true;
             axios.post('/delete_file', {
-              fid: fid
+              fid: fid,
+              account_name: (this.fileSelect.index !== null && this.formData.tasklist[this.fileSelect.index] && this.formData.tasklist[this.fileSelect.index].account_name) ? this.formData.tasklist[this.fileSelect.index].account_name : (this.fileSelect.tempAccountName || ""),
+              drive_type: this.fileSelect.driveType || ""
             }).then(response => {
               if (response.data.code == 0) {
                 this.fileSelect.fileList = this.fileSelect.fileList.filter(item => item.fid != fid);
+                this.showToast('删除成功', 'success');
               } else {
                 this.showToast('删除失败：' + response.data.message, 'error');
               }
             }).catch(error => {
               console.error('Error /delete_file:', error);
+              this.showToast('删除失败：请求异常', 'error');
+            }).finally(() => {
+              this.fileSelect.deleting = false;
+              this.modalLoading = false;
             });
+          }
         },
         getSavepathDetail(params = 0) {
           if (params.includes('/')) {
@@ -2535,6 +2739,7 @@
           if (/(?:alipan|aliyundrive)\.com/.test(url)) return 'aliyun';
           if (/drive\.uc\.cn/.test(url)) return 'uc';
           if (/(?:123pan|123865|123684|123952|123912)\.com/.test(url)) return '123pan';
+          if (/(?:cloud|m\.cloud)\.189\.cn/.test(url)) return 'cloud189';
           return null;
         },
         getShareDetail() {
@@ -2582,17 +2787,23 @@
           this.getShareDetail();
         },
         switchShare(index) {
-          currentIndex = this.smart_param.taskSuggestions.data.indexOf(this.fileSelect.share);
-          nextIndex = currentIndex + index;
+          const data = this.smart_param.taskSuggestions.data;
+          let currentIndex = data.indexOf(this.fileSelect.share);
+          let nextIndex = currentIndex + index;
+          // 跳过已验证失败的分享链接
+          while (nextIndex >= 0 && nextIndex < data.length) {
+            if (data[nextIndex].verify !== false) break;
+            nextIndex += index;
+          }
           if (nextIndex < 0) {
             this.showToast("没有上一个啦", "info");
-          } else if (nextIndex >= this.smart_param.taskSuggestions.data.length) {
+          } else if (nextIndex >= data.length) {
             this.showToast("没有下一个啦", "info");
           } else {
             this.fileSelect.error = "";
             this.fileSelect.stoken = "";
-            this.fileSelect.share = this.smart_param.taskSuggestions.data[nextIndex];
-            this.fileSelect.shareurl = this.smart_param.taskSuggestions.data[nextIndex].shareurl;
+            this.fileSelect.share = data[nextIndex];
+            this.fileSelect.shareurl = data[nextIndex].shareurl;
             this.fileSelect.paths = [];
             this.fileSelect.fileList = [];
             this.getShareDetail();
@@ -2857,6 +3068,139 @@
             }
           } catch (error) {
             console.error('Error querying QR code status:', error);
+          }
+        },
+        async cloud189StartLogin(accountIndex) {
+          const account = this.formData.accounts[accountIndex];
+          if (!account) return;
+          this.$set(this.cloud189LoginLoading, accountIndex, true);
+          try {
+            const resp = await axios.post('/cloud189/login/start', { account_name: account.name || "" });
+            if (resp.data && resp.data.success) {
+              this.showToast(resp.data.message || "登录成功", "success");
+              this.fetchData();
+              return;
+            }
+            if (resp.data && resp.data.require_captcha) {
+              const data = resp.data.data || {};
+              this.cloud189Captcha.accountIndex = accountIndex;
+              this.cloud189Captcha.accountName = account.name || "";
+              this.cloud189Captcha.loginSessionId = data.login_session_id || "";
+              this.cloud189Captcha.captchaImageBase64 = data.captcha_image_base64 || "";
+              this.cloud189Captcha.captchaCode = "";
+              this.cloud189Captcha.error = null;
+              this.cloud189Captcha.loading = false;
+              this.cloud189Captcha.submitting = false;
+              $('#cloud189CaptchaModal').modal('show');
+              return;
+            }
+            if (resp.data && resp.data.require_second_valid) {
+              const data = resp.data.data || {};
+              this.cloud189SecondValid.accountIndex = accountIndex;
+              this.cloud189SecondValid.accountName = account.name || "";
+              this.cloud189SecondValid.loginSessionId = data.login_session_id || "";
+              this.cloud189SecondValid.showName = data.show_name || "";
+              this.cloud189SecondValid.message = resp.data.message || "需要二次设备校验";
+              this.cloud189SecondValid.mode = data.mode || "";
+              this.cloud189SecondValid.password = "";
+              this.cloud189SecondValid.smsCode = "";
+              this.cloud189SecondValid.sendingSms = false;
+              this.cloud189SecondValid.error = null;
+              this.cloud189SecondValid.submitting = false;
+              $('#cloud189SecondValidModal').modal('show');
+              return;
+            }
+            this.showToast((resp.data && resp.data.message) || "登录失败", "error");
+          } catch (e) {
+            console.error(e);
+            this.showToast("登录失败", "error");
+          } finally {
+            this.$set(this.cloud189LoginLoading, accountIndex, false);
+          }
+        },
+        async cloud189SubmitCaptcha() {
+          const sid = (this.cloud189Captcha.loginSessionId || "").trim();
+          const code = (this.cloud189Captcha.captchaCode || "").trim();
+          if (!sid || !code) return;
+          this.cloud189Captcha.submitting = true;
+          this.cloud189Captcha.error = null;
+          try {
+            const resp = await axios.post('/cloud189/login/submit', { login_session_id: sid, captcha_code: code });
+            if (resp.data && resp.data.success) {
+              $('#cloud189CaptchaModal').modal('hide');
+              this.showToast(resp.data.message || "登录成功", "success");
+              this.fetchData();
+              return;
+            }
+            this.cloud189Captcha.error = (resp.data && resp.data.message) || "登录失败";
+          } catch (e) {
+            console.error(e);
+            this.cloud189Captcha.error = "登录失败";
+          } finally {
+            this.cloud189Captcha.submitting = false;
+          }
+        },
+        async cloud189SubmitSecondValidPassword() {
+          const sid = (this.cloud189SecondValid.loginSessionId || "").trim();
+          const pwd = (this.cloud189SecondValid.password || "").trim();
+          if (!sid || !pwd) return;
+          this.cloud189SecondValid.submitting = true;
+          this.cloud189SecondValid.error = null;
+          try {
+            const resp = await axios.post('/cloud189/second_valid/submit_password', { login_session_id: sid, password: pwd });
+            if (resp.data && resp.data.success) {
+              $('#cloud189SecondValidModal').modal('hide');
+              this.showToast(resp.data.message || "登录成功", "success");
+              this.fetchData();
+              return;
+            }
+            this.cloud189SecondValid.error = (resp.data && resp.data.message) || "二次校验失败";
+          } catch (e) {
+            console.error(e);
+            this.cloud189SecondValid.error = "二次校验失败";
+          } finally {
+            this.cloud189SecondValid.submitting = false;
+          }
+        },
+        async cloud189SendSecondValidSms() {
+          const sid = (this.cloud189SecondValid.loginSessionId || "").trim();
+          if (!sid) return;
+          this.cloud189SecondValid.sendingSms = true;
+          this.cloud189SecondValid.error = null;
+          try {
+            const resp = await axios.post('/cloud189/second_valid/send_sms', { login_session_id: sid });
+            if (resp.data && resp.data.success) {
+              this.showToast(resp.data.message || "验证码已发送", "success");
+              return;
+            }
+            this.cloud189SecondValid.error = (resp.data && resp.data.message) || "发送验证码失败";
+          } catch (e) {
+            console.error(e);
+            this.cloud189SecondValid.error = "发送验证码失败";
+          } finally {
+            this.cloud189SecondValid.sendingSms = false;
+          }
+        },
+        async cloud189SubmitSecondValidSms() {
+          const sid = (this.cloud189SecondValid.loginSessionId || "").trim();
+          const code = (this.cloud189SecondValid.smsCode || "").trim();
+          if (!sid || !code) return;
+          this.cloud189SecondValid.submitting = true;
+          this.cloud189SecondValid.error = null;
+          try {
+            const resp = await axios.post('/cloud189/second_valid/submit_sms', { login_session_id: sid, sms_code: code });
+            if (resp.data && resp.data.success) {
+              $('#cloud189SecondValidModal').modal('hide');
+              this.showToast(resp.data.message || "登录成功", "success");
+              this.fetchData();
+              return;
+            }
+            this.cloud189SecondValid.error = (resp.data && resp.data.message) || "二次校验失败";
+          } catch (e) {
+            console.error(e);
+            this.cloud189SecondValid.error = "二次校验失败";
+          } finally {
+            this.cloud189SecondValid.submitting = false;
           }
         },
         // ==================== 数据同步方法 ====================

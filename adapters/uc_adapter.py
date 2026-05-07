@@ -267,6 +267,32 @@ class UCAdapter(BaseCloudDriveAdapter):
             logging.error(f"[UC] 转存失败: {e}")
             return {"code": 1, "message": f"转存失败: {e}", "data": {}}
 
+    def unarchive(self, fid: str, to_pdir_fid: str) -> Dict:
+        url = f"{self.BASE_URL}/1/clouddrive/archive/unarchive"
+        params = {
+            "pr": "UCBrowser",
+            "fr": "pc",
+            "__dt": int(random.uniform(1, 5) * 60 * 1000),
+            "__t": datetime.now().timestamp(),
+        }
+        payload = {
+            "fid": fid,
+            "pwd": "",
+            "select_mode": 0,
+            "path_no_list": [],
+            "curr_path_no": 0,
+            "remember_pwd": False,
+            "conflict_mode": 3,
+            "suffix_type": 0,
+            "to_pdir_fid": to_pdir_fid,
+        }
+        try:
+            response = self._send_request("POST", url, json=payload, params=params)
+            return self._safe_json(response)
+        except Exception as e:
+            logging.error(f"[UC] 解压失败: {e}")
+            return {"status": 500, "code": 1, "message": f"解压失败: {e}", "data": {}}
+
     def query_task(self, task_id: str) -> Dict:
         """查询任务状态"""
         retry_index = 0
@@ -391,6 +417,9 @@ class UCAdapter(BaseCloudDriveAdapter):
         except Exception as e:
             logging.error(f"[UC] 移动文件失败: {e}")
             return {"code": 1, "message": f"移动文件失败: {e}"}
+
+    def move_files(self, fids: List[str], to_pdir_fid: str) -> Dict:
+        return self.move_files_to_target(fids, to_pdir_fid)
 
     def get_or_create_share_folder(self) -> Optional[str]:
         """获取或创建'来自：分享'文件夹，返回其fid"""

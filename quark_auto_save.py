@@ -1901,8 +1901,8 @@ def dir_check_and_save_with_adapter(adapter, task, pwd_id, stoken, pdir_fid="", 
             batch_tokens = fid_token_list[:100]
             batch_names = file_names[:100]
 
-            # 115 适配器支持 file_names 参数，用于按文件名匹配新 fid
-            if hasattr(adapter, 'DRIVE_TYPE') and (adapter.DRIVE_TYPE == "115" or adapter.DRIVE_TYPE == "baidu"):
+            # 115/百度/cloud189 适配器支持 file_names 参数，用于按文件名匹配新 fid
+            if hasattr(adapter, 'DRIVE_TYPE') and (adapter.DRIVE_TYPE == "115" or adapter.DRIVE_TYPE == "baidu" or adapter.DRIVE_TYPE == "cloud189"):
                 save_file_return = adapter.save_file(
                     batch_fids, batch_tokens, actual_save_fid, pwd_id, stoken,
                     file_names=batch_names
@@ -1983,7 +1983,7 @@ def do_rename_with_adapter(adapter, tree, node_id=None):
         file = child.data
         if file.get("is_dir"):
             pass
-        elif file.get("file_name_re") and file["file_name_re"] != file["file_name"]:
+        elif file.get("fid") and file.get("file_name_re") and file["file_name_re"] != file["file_name"]:
             rename_ret = adapter.rename(file["fid"], file["file_name_re"])
             print(f"重命名：{file['file_name']} → {file['file_name_re']}")
             if rename_ret.get("code") != 0:

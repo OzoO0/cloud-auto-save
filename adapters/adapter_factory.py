@@ -15,6 +15,7 @@ from adapters.xunlei_adapter import XunleiAdapter
 from adapters.aliyun_adapter import AliyunAdapter
 from adapters.uc_adapter import UCAdapter
 from adapters.pan123_adapter import Pan123Adapter
+from adapters.cloud189_adapter import Cloud189Adapter
 
 
 class AdapterFactory:
@@ -29,6 +30,7 @@ class AdapterFactory:
         "aliyun": AliyunAdapter,
         "uc": UCAdapter,
         "123pan": Pan123Adapter,
+        "cloud189": Cloud189Adapter,
     }
 
     # URL 模式映射
@@ -40,6 +42,7 @@ class AdapterFactory:
         r"(?:alipan|aliyundrive)\.com": "aliyun",
         r"drive\.uc\.cn": "uc",
         r"(?:123pan|123865|123684|123952|123912)\.com": "123pan",
+        r"(?:cloud|m\.cloud)\.189\.cn": "cloud189",
     }
 
     # 实例缓存: (drive_type, cookie_hash) -> adapter_instance

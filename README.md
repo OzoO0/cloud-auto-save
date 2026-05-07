@@ -1,6 +1,6 @@
 <div align="center">
 
-!\[quark-logo]\(img/icon.png null)
+![quark-logo](img/icon.png)
 
 # 网盘自动转存
 
@@ -8,9 +8,19 @@
 
 基于[Cp0204/quark-auto-save](https://github.com/Cp0204/quark-auto-save)修改，增加多网盘支持，修改前端UI。
 
-[!\[wiki\](https://img.shields.io/badge/wiki-Documents-green?logo=github null)](https://github.com/ozoo0/cloud-auto-save/wiki) [!\[github releases\](https://img.shields.io/github/v/release/ozoo0/cloud-auto-save?logo=github null)](https://github.com/ozoo0/cloud-auto-save) [!\[docker pulls\](https://img.shields.io/docker/pulls/ozoo0/cloud-auto-save?logo=docker&\&logoColor=white null)](https://hub.docker.com/r/ozoo0/cloud-auto-save) [!\[docker image size\](https://img.shields.io/docker/image-size/ozoo0/cloud-auto-save?logo=docker&\&logoColor=white null)](https://hub.docker.com/r/ozoo0/cloud-auto-save)
+[![zread](https://img.shields.io/badge/Ask_AI-_.svg?style=flat&color=00b0aa&labelColor=000000&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTQuOTYxNTYgMS42MDAxSDIuMjQxNTZDMS44ODgxIDEuNjAwMSAxLjYwMTU2IDEuODg2NjQgMS42MDE1NiAyLjI0MDFWNC45NjAxQzEuNjAxNTYgNS4zMTM1NiAxLjg4ODEgNS42MDAxIDIuMjQxNTYgNS42MDAxSDQuOTYxNTZDNS4zMTUwMiA1LjYwMDEgNS42MDE1NiA1LjMxMzU2IDUuNjAxNTYgNC45NjAxVjIuMjQwMUM1LjYwMTU2IDEuODg2NjQgNS4zMTUwMiAxLjYwMDEgNC45NjE1NiAxLjYwMDFaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00Ljk2MTU2IDEwLjM5OTlIMi4yNDE1NkMxLjg4ODEgMTAuMzk5OSAxLjYwMTU2IDEwLjY4NjQgMS42MDE1NiAxMS4wMzk5VjEzLjc1OTlDMS42MDE1NiAxNC4xMTM0IDEuODg4MSAxNC4zOTk5IDIuMjQxNTYgMTQuMzk5OUg0Ljk2MTU2QzUuMzE1MDIgMTQuMzk5OSA1LjYwMTU2IDE0LjExMzQgNS42MDE1NiAxMy43NTk5VjExLjAzOTlDNS42MDE1NiAxMC42ODY0IDUuMzE1MDIgMTAuMzk5OSA0Ljk2MTU2IDEwLjM5OTlaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik0xMy43NTg0IDEuNjAwMUgxMS4wMzg0QzEwLjY4NSAxLjYwMDEgMTAuMzk4NCAxLjg4NjY0IDEwLjM5ODQgMi4yNDAxVjQuOTYwMUMxMC4zOTg0IDUuMzEzNTYgMTAuNjg1IDUuNjAwMSAxMS4wMzg0IDUuNjAwMUgxMy43NTg0QzE0LjExMTkgNS42MDAxIDE0LjM5ODQgNS4zMTM1NiAxNC4zOTg0IDQuOTYwMVYyLjI0MDFDMTQuMzk4NCAxLjg4NjY0IDE0LjExMTkgMS42MDAxIDEzLjc1ODQgMS42MDAxWiIgZmlsbD0iI2ZmZiIvPgo8cGF0aCBkPSJNNCAxMkwxMiA0TDQgMTJaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00IDEyTDEyIDQiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K&logoColor=ffffff)](https://zread.ai/OzoO0/cloud-auto-save)
 
-!\[run\_log]\(img/run\_log.png null)
+[![wiki][wiki-image]][wiki-url] [![github releases][gitHub-releases-image]][github-url] [![docker pulls][docker-pulls-image]][docker-url] [![docker image size][docker-image-size-image]][docker-url]
+
+[wiki-image]: https://img.shields.io/badge/wiki-Documents-green?logo=github
+[gitHub-releases-image]: https://img.shields.io/github/v/release/OzoO0/cloud-auto-save?logo=github
+[docker-pulls-image]: https://img.shields.io/docker/pulls/ozoo0/cloud-auto-save?logo=docker&&logoColor=white
+[docker-image-size-image]: https://img.shields.io/docker/image-size/ozoo0/cloud-auto-save?logo=docker&&logoColor=white
+[github-url]: https://github.com/OzoO0/cloud-auto-save
+[docker-url]: https://hub.docker.com/r/ozoo0/cloud-auto-save
+[wiki-url]: https://github.com/Cp0204/quark-auto-save/wiki
+
+![run_log](img/run_log.png)
 
 </div>
 
@@ -31,8 +41,9 @@
   - [x] 百度网盘
   - [x] 阿里云盘
   - [x] UC网盘
-  - [x] 迅雷网盘(长时间token会过期，待完善！)
+  - [x] 迅雷网盘(长时间token会过期！)
   - [x] 123网盘
+  - [x] 天翼云盘
 - 分享链接
   - [x] 支持分享链接的子目录
   - [x] 记录失效分享并跳过任务

@@ -7,12 +7,14 @@ import traceback
 class Auto_unarchive:
     default_config = {
         "tips_": "自动云解压(zip|rar|7z)到保存目录，在任务插件选项中启用，该功能需SVIP支持",
+        "global_enable": False,  # 是否全局开启自动解压
         "max_concurrent": 3,  # 限制同时解压的任务数
     }
 
     default_task_config = {
         "enable": False,  # 是否自动解压
-        "auto_clean": True,  # 是否自动删除原始文件，可覆盖全局配置
+        "auto_clean": True,  # 是否自动删除原始文件
+        "auto_clean_zipdir": False,  # 是否删除占位目录，适用于一次性运行的任务，无须防止重复转存的占位目录
     }
 
     is_active = True  # 默认全局激活，由任务配置中开启
@@ -28,14 +30,15 @@ class Auto_unarchive:
         account = kwargs.get("account")
         tree = kwargs.get("tree")
 
-        task_config = task.get("addition", {}).get(
-            self.plugin_name, self.default_task_config
-        )
-        if not self.is_active or not task_config.get("enable"):
-            return task
+        task_config = task.get("addition", {}).get(self.plugin_name, self.default_task_config)
+
+        if not str(self.global_enable).lower() == "true":
+            if not task_config.get("enable"):
+                return task
 
         # 任务配置中是否自动删除原始文件
         self.auto_clean = task_config.get("auto_clean", True)
+        self.auto_clean_zipdir = task_config.get("auto_clean_zipdir", False)
 
         try:
             savepath = re.sub(r"/{2,}", "/", f"/{task['savepath']}")
@@ -44,7 +47,7 @@ class Auto_unarchive:
                 return task
 
             drive_type = getattr(account, "DRIVE_TYPE", "") or ("quark" if account.__class__.__name__ == "Quark" else "")
-            if drive_type and drive_type != "quark":
+            if drive_type and drive_type not in {"quark", "uc"}:
                 print(f"⚠️ [{task['taskname']}] {drive_type} 网盘未适配云解压，跳过插件执行")
                 return task
 
@@ -70,7 +73,7 @@ class Auto_unarchive:
 
             while wait_list or active_tasks:
 
-                while len(active_tasks) < self.max_concurrent and wait_list:
+                while len(active_tasks) < int(self.max_concurrent) and wait_list:
                     node = wait_list.pop(0)
                     zip_fid = node.data["fid"]
                     zip_name = node.data["file_name_re"]
@@ -112,18 +115,14 @@ class Auto_unarchive:
                     elif q_res.get("code") == 1:
                         pass
                     else:
-                        print(
-                            f"  ⚠️ 任务异常: {p_task['zip_name']} {q_res.get('message','')}"
-                        )
+                        print(f"  ⚠️ 任务异常: {p_task['zip_name']} {q_res.get('message','')}")
                         active_tasks.remove(p_task)
 
                 if active_tasks:
                     time.sleep(5)
 
             if all_move_fids:
-                print(
-                    f"🚀 任务全部解压完成，开始批量移动 {len(all_move_fids)} 个文件..."
-                )
+                print(f"🚀 任务全部解压完成，开始批量移动 {len(all_move_fids)} 个文件...")
                 if account.move_files(all_move_fids, target_pdir_fid).get("code") == 0:
                     if all_cleanup_fids and account.delete(all_cleanup_fids):
                         print(f"🧹 批量清理完成")
@@ -146,8 +145,12 @@ class Auto_unarchive:
         if self.auto_clean:
             # 压缩包加入清理队列
             clean_list.append(p_task["zip_fid"])
-            # 重命名解压目录为压缩包名称，占位，避免下次重复转存
-            account.rename(sub_dir_fid, p_task["zip_name"])
+            if self.auto_clean_zipdir:
+                # 解压目录加入清理队列
+                clean_list.append(sub_dir_fid)
+            else:
+                # 重命名解压目录为压缩包名称，占位，避免下次重复转存
+                account.rename(sub_dir_fid, p_task["zip_name"])
         else:
             # 不自动清理时，原压缩包占位，将解压目录加入清理队列
             clean_list.append(sub_dir_fid)
