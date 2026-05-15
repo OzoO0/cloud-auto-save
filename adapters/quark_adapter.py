@@ -401,6 +401,56 @@ class QuarkAdapter(BaseCloudDriveAdapter):
         else:
             return False, response["message"]
 
+    def sign_in(self) -> Dict:
+        """统一签到入口"""
+        if not self.mparam:
+            return {
+                "supported": False,
+                "ok": False,
+                "message": "移动端参数未设置，跳过签到",
+                "data": None,
+            }
+
+        growth_info = self.get_growth_info()
+        if not growth_info:
+            return {
+                "supported": True,
+                "ok": False,
+                "message": "签到进度读取异常，可能登录失效",
+                "data": None,
+            }
+
+        cap_sign = growth_info.get("cap_sign", {}) or {}
+        if cap_sign.get("sign_daily"):
+            reward_mb = int((cap_sign.get("sign_daily_reward", 0) or 0) / 1024 / 1024)
+            progress = cap_sign.get("sign_progress", 0)
+            target = cap_sign.get("sign_target", 0)
+            return {
+                "supported": True,
+                "ok": True,
+                "message": f"今日已签到+{reward_mb}MB，连签进度({progress}/{target})",
+                "data": growth_info,
+            }
+
+        sign_ok, sign_data = self.get_growth_sign()
+        if sign_ok:
+            reward_mb = int((sign_data or 0) / 1024 / 1024)
+            progress = (cap_sign.get("sign_progress", 0) or 0) + 1
+            target = cap_sign.get("sign_target", 0)
+            return {
+                "supported": True,
+                "ok": True,
+                "message": f"签到成功+{reward_mb}MB，连签进度({progress}/{target})",
+                "data": growth_info,
+            }
+
+        return {
+            "supported": True,
+            "ok": False,
+            "message": str(sign_data or "签到失败"),
+            "data": growth_info,
+        }
+
     def recycle_list(self, page: int = 1, size: int = 30) -> List:
         """获取回收站列表"""
         url = f"{self.BASE_URL}/1/clouddrive/file/recycle/list"

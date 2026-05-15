@@ -1409,6 +1409,23 @@ def format_bytes(size_bytes: int) -> str:
 
 
 def do_sign(account):
+    if hasattr(account, "sign_in"):
+        try:
+            sign_result = account.sign_in()
+        except Exception as e:
+            print(f"📅 签到异常: {e}")
+            print()
+            return
+        if isinstance(sign_result, dict) and sign_result.get("supported") is not None:
+            if not sign_result.get("supported"):
+                print(f"⏭️ {sign_result.get('message', '当前网盘未实现签到')}")
+            elif sign_result.get("ok"):
+                print(f"📅 {sign_result.get('message', '签到成功')}")
+            else:
+                print(f"📅 签到异常: {sign_result.get('message', '签到失败')}")
+            print()
+            return
+
     if not account.mparam:
         print("⏭️ 移动端参数未设置，跳过签到")
         print()
@@ -1447,6 +1464,27 @@ def do_sign(account):
                 print(f"📅 签到异常: {sign_return}")
     else:
         print("⏭️ 签到进度读取异常，可能登录失效，跳过签到")
+    print()
+
+
+def do_sign_multi_drive(account_manager, tasklist=None):
+    """多网盘统一签到入口，异常不阻塞后续流程"""
+    results = account_manager.sign_in_active_adapters(tasklist)
+    if not results:
+        print("⏭️ 当前任务未匹配到可签到账户")
+        print()
+        return
+
+    for name, result in results.items():
+        adapter = account_manager.get_adapter(name)
+        drive_type = adapter.DRIVE_TYPE if adapter else "unknown"
+        if not result.get("supported"):
+            print(f"⏭️ 账户 '{name}' ({drive_type}) 跳过签到: {result.get('message', '当前网盘未实现签到')}")
+            continue
+        if result.get("ok"):
+            print(f"📅 账户 '{name}' ({drive_type}) 签到完成: {result.get('message', '签到成功')}")
+        else:
+            print(f"📅 账户 '{name}' ({drive_type}) 签到异常: {result.get('message', '签到失败')}")
     print()
 
 
@@ -2075,12 +2113,9 @@ def main():
             return
         print()
 
-        # 签到（仅夸克账户）
+        # 签到（按任务涉及账户执行，异常不阻塞）
         print(f"===============签到任务===============")
-        for adapter in account_manager.get_adapters_by_type("quark"):
-            if adapter.is_active and hasattr(adapter, 'get_growth_info'):
-                do_sign(adapter)
-        print()
+        do_sign_multi_drive(account_manager, tasklist)
 
         # 转存
         if cookie_form_file:

@@ -309,9 +309,52 @@ class AccountManager:
         """
         success_count = 0
         for name, adapter in adapters.items():
-            if adapter.init():
-                success_count += 1
-                print(f"✅ 账户 '{name}' ({adapter.DRIVE_TYPE}) 登录成功: {adapter.nickname}")
-            else:
-                print(f"❌ 账户 '{name}' ({adapter.DRIVE_TYPE}) 登录失败")
+            try:
+                if adapter.login():
+                    success_count += 1
+                    print(f"✅ 账户 '{name}' ({adapter.DRIVE_TYPE}) 登录成功: {adapter.nickname}")
+                else:
+                    print(f"❌ 账户 '{name}' ({adapter.DRIVE_TYPE}) 登录失败")
+            except Exception as e:
+                print(f"❌ 账户 '{name}' ({adapter.DRIVE_TYPE}) 登录异常: {e}")
         return success_count
+
+    def sign_in_active_adapters(self, tasklist: Optional[List[Dict]] = None) -> Dict[str, Dict]:
+        """
+        对活跃适配器执行签到
+        Args:
+            tasklist: 可选，传入后只对任务涉及到的账户/网盘签到
+        Returns:
+            账户名到签到结果的映射
+        """
+        results: Dict[str, Dict] = {}
+        targets = self.adapters
+        if tasklist is not None:
+            needed_names = set()
+            needed_types = set()
+            for task in tasklist:
+                if account_name := task.get("account_name"):
+                    needed_names.add(account_name)
+                if shareurl := task.get("shareurl", ""):
+                    if drive_type := AdapterFactory.get_drive_type_by_url(shareurl):
+                        needed_types.add(drive_type)
+            targets = {
+                name: adapter
+                for name, adapter in self.adapters.items()
+                if name in needed_names or adapter.DRIVE_TYPE in needed_types
+            }
+
+        for name, adapter in targets.items():
+            if not getattr(adapter, "is_active", False):
+                continue
+            try:
+                result = adapter.sign_in()
+            except Exception as e:
+                result = {
+                    "supported": True,
+                    "ok": False,
+                    "message": str(e),
+                    "data": None,
+                }
+            results[name] = result
+        return results

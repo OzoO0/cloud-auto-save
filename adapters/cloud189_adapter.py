@@ -49,6 +49,7 @@ class Cloud189SecondValidRequired(Exception):
 
 class Cloud189Adapter(BaseCloudDriveAdapter):
     DRIVE_TYPE = "cloud189"
+    DRIVE_NAME = "天翼云盘"
 
     HOST_URL = "https://cloud.189.cn"
     AUTH_URL = "https://open.e.189.cn/api/logbox/oauth2/"
@@ -660,6 +661,104 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
         if not isinstance(j, dict) or "userId" not in j:
             return None
         return j
+
+    def _get_user_size_info(self) -> Dict[str, Any]:
+        """获取容量信息"""
+        url = f"{self.HOST_URL}/api/portal/getUserSizeInfo.action"
+        params = {
+            "noCache": str(time.time()),
+            "needClassification": "true",
+        }
+        resp = self._session.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        j = resp.json()
+        if not isinstance(j, dict):
+            return {}
+        if j.get("res_code", 1) != 0:
+            return {}
+        return j
+
+    def get_account_config(self) -> Dict[str, Any]:
+        """获取天翼云盘账户配置/容量信息"""
+        size_info: Dict[str, Any] = {}
+        account_info: Dict[str, Any] = {}
+
+        try:
+            self._ensure_login()
+            account_info = self._get_logined_infos() or {}
+            size_info = self._get_user_size_info() or {}
+        except Exception:
+            account_info = {}
+            size_info = {}
+
+        nickname = (
+            account_info.get("nickname")
+            or self._account_name
+            or self.nickname
+            or self._user_name
+            or f"cloud189用户{self.index}"
+        )
+        if nickname:
+            self.nickname = nickname
+
+        username = size_info.get("account") or self._user_name or nickname
+        cloud_capacity = size_info.get("cloudCapacityInfo") if isinstance(size_info, dict) else None
+
+        return {
+            "drive_type": self.DRIVE_TYPE,
+            "drive_name": self.DRIVE_NAME,
+            "nickname": nickname,
+            "username": username,
+            "used_space": int(cloud_capacity.get("usedSize", 0)) if isinstance(cloud_capacity, dict) else None,
+            "total_space": int(cloud_capacity.get("totalSize", 0)) if isinstance(cloud_capacity, dict) else None,
+            "member_type": "",
+            "member_status": {},
+            "raw": {
+                "account_info": account_info or None,
+                "member_info": size_info or None,
+            },
+        }
+
+    def sign_in(self) -> Dict[str, Any]:
+        """执行天翼云盘签到"""
+        self._ensure_login()
+        url = "https://m.cloud.189.cn/mkt/userSign.action"
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+            ),
+            "Referer": "https://m.cloud.189.cn/",
+            "Accept": "application/json, text/plain, */*",
+        }
+        resp = self._session.get(
+            url,
+            params={"noCache": str(time.time())},
+            headers=headers,
+            timeout=20,
+        )
+        resp.raise_for_status()
+        try:
+            data = resp.json()
+        except Exception:
+            raise RuntimeError((resp.text or "").strip()[:200] or "签到失败")
+        if not isinstance(data, dict):
+            raise RuntimeError("签到失败")
+
+        is_sign = bool(data.get("isSign"))
+        bonus = data.get("netdiskBonus")
+        try:
+            bonus_value = int(bonus) if bonus is not None else 0
+        except Exception:
+            bonus_value = 0
+        message = "今日已签到" if is_sign else f"签到成功，获得 {bonus_value}M 空间"
+        return {
+            "supported": True,
+            "ok": True,
+            "message": message,
+            "reward": bonus_value,
+            "data": data,
+        }
 
     def init(self) -> Any:
         logger.info(f"[cloud189] adapter init: account={self._account_name}")

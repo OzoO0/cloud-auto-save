@@ -29,6 +29,15 @@ class BaseCloudDriveAdapter(ABC):
         """
         pass
 
+    def login(self) -> Any:
+        """
+        统一登录入口
+        默认复用 init，子类可按需重写
+        Returns:
+            成功返回账户信息 dict，失败返回 False
+        """
+        return self.init()
+
     @abstractmethod
     def get_stoken(self, pwd_id: str, passcode: str = "") -> Dict:
         """
@@ -189,6 +198,25 @@ class BaseCloudDriveAdapter(ABC):
     def get_account_info(self) -> Any:
         """获取账户信息（可选实现）"""
         return False
+
+    def sign_in(self) -> Dict:
+        """
+        统一签到入口（可选实现）
+        Returns:
+            返回标准结果：
+            {
+                "supported": bool,  # 是否支持签到
+                "ok": bool,         # 是否执行成功
+                "message": str,     # 描述信息
+                "data": Any         # 原始响应
+            }
+        """
+        return {
+            "supported": False,
+            "ok": False,
+            "message": "当前网盘未实现签到",
+            "data": None,
+        }
 
     def update_savepath_fid(self, tasklist: List[Dict]) -> bool:
         """
