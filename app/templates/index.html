@@ -1149,7 +1149,10 @@
               <div v-if="cloud189Captcha.error" class="alert alert-danger text-left">
                 {{ cloud189Captcha.error }}
               </div>
-              <img v-if="cloud189Captcha.captchaImageBase64" :src="'data:image/png;base64,' + cloud189Captcha.captchaImageBase64" alt="验证码" style="max-width: 100%; height: auto;" loading="lazy" decoding="async">
+              <img v-if="cloud189Captcha.captchaImageBase64" :src="'data:' + (cloud189Captcha.captchaImageMime || 'image/png') + ';base64,' + cloud189Captcha.captchaImageBase64" alt="验证码" style="max-width: 100%; height: auto;" loading="lazy" decoding="async">
+              <div v-else class="alert alert-warning text-left mt-2 mb-0">
+                未获取到验证码图片，请关闭后重试。
+              </div>
               <input type="text" v-model="cloud189Captcha.captchaCode" class="form-control mt-2" placeholder="请输入验证码" autocomplete="off">
               <small class="text-muted d-block mt-2">提交成功后将自动回写 ssoncookie</small>
             </div>
@@ -1666,6 +1669,7 @@
           accountName: '',
           loginSessionId: '',
           captchaImageBase64: '',
+          captchaImageMime: 'image/png',
           captchaCode: '',
           loading: false,
           submitting: false,
@@ -3075,6 +3079,7 @@
           if (!account) return;
           this.$set(this.cloud189LoginLoading, accountIndex, true);
           try {
+            await axios.post('/update', { accounts: this.formData.accounts });
             const resp = await axios.post('/cloud189/login/start', { account_name: account.name || "" });
             if (resp.data && resp.data.success) {
               this.showToast(resp.data.message || "登录成功", "success");
@@ -3087,6 +3092,7 @@
               this.cloud189Captcha.accountName = account.name || "";
               this.cloud189Captcha.loginSessionId = data.login_session_id || "";
               this.cloud189Captcha.captchaImageBase64 = data.captcha_image_base64 || "";
+              this.cloud189Captcha.captchaImageMime = data.captcha_image_mime || "image/png";
               this.cloud189Captcha.captchaCode = "";
               this.cloud189Captcha.error = null;
               this.cloud189Captcha.loading = false;

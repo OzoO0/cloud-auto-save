@@ -141,6 +141,12 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
         try:
             resp = share_session.get(url, timeout=15)
             data = self._safe_json(resp)
+            if data.get("data", {}).get("shareinfo",{}).get("forbid_reason"):
+                return {
+                "status": 400,
+                "code": 1,
+                "message": data.get("data", {}).get("shareinfo",{}).get("forbid_reason"),
+            }
             if data.get("state") and data.get("data", {}).get("list"):
                 return {
                     "status": 200,

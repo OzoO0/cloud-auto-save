@@ -278,13 +278,20 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtow
 
   一个功能丰富的 Telegram 机器人，专注于媒体资源管理、Emby 集成、自动下载和夸克网盘资源管理。
 
+## 版权
+
+- **原项目**：Copyright (C) Cp0204 - [Cp0204/quark-auto-save](https://github.com/Cp0204/quark-auto-save)
+- **本项目**：Copyright (C) 2025-2026 OzoO0 - [OzoO0/cloud-auto-save](https://github.com/ozoo0/cloud-auto-save)
+
+本项目基于 [Cp0204/quark-auto-save:0.8.4](https://github.com/Cp0204/quark-auto-save/releases/tag/v0.8.4) 进行二次开发，包含大量功能扩展与代码重构，新增和修改部分的版权归 OzoO0 所有。
+
 ## 声明
 
-本项目为个人兴趣开发，旨在通过程序自动化提高网盘使用效率。
+本项目基于个人兴趣开发并开源，仅供学习与交流使用，不包含任何破解行为，只是对夸克官方 API 的封装与调用，所有数据均来源于各大网盘官方，本人不对网盘内容及官方 API 变更所导致的任何后果负责。
 
-程序没有任何破解行为，只是对于网盘已有的API进行封装，所有数据来自于网盘官方API；本人不对网盘内容负责、不对网盘官方API未来可能的变动导致的影响负责，请自行斟酌使用。
+## 致谢
 
-开源仅供学习与交流使用，未盈利也未授权商业使用，严禁用于非法用途。
+本项目基于 [Cp0204/quark-auto-save:0.8.4](https://github.com/Cp0204/quark-auto-save/releases/tag/v0.8.4) 进行二次开发，感谢 [Cp0204](https://github.com/Cp0204) 的开源贡献。
 
 ## Sponsor
 

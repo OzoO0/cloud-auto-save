@@ -27,11 +27,18 @@ def set_config_saver(config_path: Any):
 
 
 class Cloud189CaptchaRequired(Exception):
-    def __init__(self, captcha_token: str, image_bytes: bytes, context: Dict[str, str]):
+    def __init__(
+        self,
+        captcha_token: str,
+        image_bytes: bytes,
+        context: Dict[str, str],
+        image_content_type: str = "image/png",
+    ):
         super().__init__("captcha required")
         self.captcha_token = captcha_token
         self.image_bytes = image_bytes
         self.context = context
+        self.image_content_type = image_content_type or "image/png"
 
 
 class Cloud189SecondValidRequired(Exception):
@@ -244,6 +251,7 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
         params = {"pageId": 1, "redirectURL": f"{self.HOST_URL}/main.action"}
         resp = self._session.get(url, params=params, timeout=15, allow_redirects=True)
         resp.raise_for_status()
+        page_html = resp.text or ""
 
         parsed = urlparse(resp.url)
         qs = parse_qs(parsed.query or "")
@@ -299,8 +307,19 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
                 "dynamicCheck": "FALSE",
                 "cb_SaveName": str(data.get("cb_SaveName") or "3"),
                 "state": str(data.get("state") or ""),
+                "loginPageUrl": resp.url,
             }
         )
+        captcha_token_patterns = [
+            r"captchaToken['\"]?\s*[:=]\s*['\"]([^'\"]+)['\"]",
+            r'name=[\'"]captchaToken[\'"]\s+value=[\'"]([^\'"]+)[\'"]',
+            r'id=[\'"]captchaToken[\'"]\s+value=[\'"]([^\'"]+)[\'"]',
+        ]
+        for pattern in captcha_token_patterns:
+            m = re.search(pattern, page_html, re.I)
+            if m and (m.group(1) or "").strip():
+                out["captchaToken"] = (m.group(1) or "").strip()
+                break
         return out
 
     def _need_captcha(self, login_params: Dict[str, Any], username: str) -> bool:
@@ -329,15 +348,32 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
         except Exception:
             return str(v).strip() == "1"
 
-    def _get_captcha_image(self, login_params: Dict[str, Any]) -> Tuple[str, str, bytes]:
+    def _get_captcha_image(self, login_params: Dict[str, Any]) -> Tuple[str, str, bytes, str]:
         lt = str(login_params.get("lt") or "")
         req_id = str(login_params.get("reqId") or "")
         captcha_token = str(login_params.get("captchaToken") or "")
+        img_headers = {
+            "lt": lt,
+            "reqId": req_id,
+            "REQID": req_id,
+            "Referer": str(login_params.get("loginPageUrl") or "https://open.e.189.cn/api/logbox/oauth2/unifyAccountLogin.do"),
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Sec-Fetch-Dest": "image",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Site": "same-origin",
+        }
         if captcha_token:
             img_url = f"{self.AUTH_URL}picCaptcha.do"
-            img = self._session.get(img_url, params={"token": captcha_token}, timeout=30)
+            img = self._session.get(
+                img_url,
+                params={"token": captcha_token, "_": str(int(time.time() * 1000))},
+                headers=img_headers,
+                timeout=30,
+            )
             img.raise_for_status()
-            return captcha_token, "", img.content or b""
+            content_type = (img.headers.get("Content-Type") or "image/png").split(";", 1)[0].strip() or "image/png"
+            if img.content:
+                return captcha_token, "", img.content or b"", content_type
 
         app_id = str(login_params.get("appKey") or login_params.get("appId") or "cloud")
         uuid_url = f"{self.AUTH_URL}getUUID.do"
@@ -360,11 +396,12 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
         img = self._session.get(
             img_url,
             params={"uuid": encode_uuid, "REQID": req_id},
-            headers={"lt": lt, "reqId": req_id},
+            headers=img_headers,
             timeout=30,
         )
         img.raise_for_status()
-        return token, encode_uuid, img.content or b""
+        content_type = (img.headers.get("Content-Type") or "image/png").split(";", 1)[0].strip() or "image/png"
+        return token, encode_uuid, img.content or b"", content_type
 
     def _login_submit(
         self,
@@ -433,11 +470,11 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
         login_params = self._get_login_url_params()
         need = self._need_captcha(login_params, username)
         if need and not captcha_code:
-            captcha_token, _, img = self._get_captcha_image(login_params)
+            captcha_token, _, img, content_type = self._get_captcha_image(login_params)
             ctx = dict(login_params)
             ctx["captchaToken"] = captcha_token
             ctx["captchaType"] = "1"
-            raise Cloud189CaptchaRequired(captcha_token, img, ctx)
+            raise Cloud189CaptchaRequired(captcha_token, img, ctx, content_type)
         j = self._login_submit(username, password, captcha_code, login_params)
         if isinstance(j, dict) and int(j.get("result", 1)) == 0:
             to_url = j.get("toUrl") or ""

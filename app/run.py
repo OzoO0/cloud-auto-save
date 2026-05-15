@@ -2027,7 +2027,11 @@ def cloud189_login_start():
                 {
                     "success": False,
                     "require_captcha": True,
-                    "data": {"login_session_id": login_session_id, "captcha_image_base64": img_b64},
+                    "data": {
+                        "login_session_id": login_session_id,
+                        "captcha_image_base64": img_b64,
+                        "captcha_image_mime": getattr(ce, "image_content_type", "image/png") or "image/png",
+                    },
                     "message": "需要验证码",
                 }
             )
@@ -2060,10 +2064,10 @@ def cloud189_login_start():
                     "message": str(se),
                 }
             )
-            cookies = _cloud189_finalize_login_and_get_cookies(adapter._session, to_url)
+        cookies = _cloud189_finalize_login_and_get_cookies(adapter._session)
         ok, reason = _cloud189_check_session_detail(adapter._session)
         if not ok:
-                return jsonify({"success": False, "message": f"二次校验后登录态无效({reason})，请重试。"})
+            return jsonify({"success": False, "message": f"登录态无效({reason})，请重试。"})
         sson = cookies.get("SSON") or ""
         if not sson:
             return jsonify({"success": False, "message": "登录成功但未获取到 SSON"})
