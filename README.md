@@ -30,6 +30,9 @@
 > \[!NOTE]
 > 开发者≠客服，开源免费≠帮你解决使用问题；本项目 Wiki 已经相对完善，遇到问题请先翻阅 Issues 和 Wiki ，请勿盲目发问。
 
+# 推荐
+欢迎关注全新项目[CASX](https://github.com/OzoO0/cloud-auto-save-x)，全新自动追剧一体化平台 更智能、更好用；支持自动修复异常任务替换链接；如你计划继续长期使用当前工具，建议顺手点个 Star 并关注新项目动态。
+
 ## 功能
 
 - 部署方式
@@ -94,7 +97,7 @@ docker run -d \
   --network bridge \
   --restart unless-stopped \
   ozoo0/cloud-auto-save:latest
-  # registry.cn-hangzhou.aliyuncs.com/cp0204/quark-auto-save:latest # 国内镜像地址
+  # registry.cn-hangzhou.aliyuncs.com/ozoo0/cloud-auto-save:latest # 国内镜像地址
 ```
 
 docker-compose.yml

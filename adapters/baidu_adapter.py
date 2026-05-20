@@ -73,6 +73,7 @@ class PanNode:
     GETCAPTCHA = "api/getcaptcha"
     CLOUD = "rest/2.0/services/cloud_dl"
     USER_PRODUCTS = "rest/2.0/membership/user"
+    FILE = "api/list"
 
     @classmethod
     def url(cls, node: str) -> str:
@@ -301,15 +302,21 @@ class BaiduAdapter(BaseCloudDriveAdapter):
     # ==================== 文件列表操作 ====================
     def _api_list(self, remotepath: str) -> Dict:
         """调用文件列表 API"""
-        url = PcsNode.url(PcsNode.FILE)
+        
+        url = PanNode.url(PanNode.FILE)
         params = {
-            "method": "list",
-            "by": "name",
-            "limit": "0-2147483647",
-            "order": "asc",
-            "path": remotepath,
+            "clienttype": "0",
+            "app_id": "250528",
+            "web": "1",
+            "channel": "chunlei",
+            "dp-logid": '81153300882182800128',
+            "order": "time",
+            "desc": "1",
+            "num": "200",
+            "page": "1",
+            "dir": remotepath,
         }
-        resp = self._request("GET", url, params=params)
+        resp = self._request("POST", url, params=params)
         return self._check_response(resp.json())
 
     def _api_makedir(self, directory: str) -> Dict:

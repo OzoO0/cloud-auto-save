@@ -40,6 +40,39 @@
     </nav>
 
     <div class="main-content" ref="mainContent">
+      <section
+        v-if="projectPromotion.visible"
+        class="project-promo-banner animate-fadeIn"
+        role="status"
+        aria-live="polite"
+      >
+        <div class="project-promo-main">
+          <div class="project-promo-icon" aria-hidden="true">
+            <i class="bi bi-stars"></i>
+          </div>
+          <div class="project-promo-copy">
+            <div class="project-promo-title">新项目推荐</div>
+            <p class="project-promo-text">
+              欢迎关注全新项目
+              <a
+                href="https://github.com/OzoO0/cloud-auto-save-x"
+                target="_blank"
+                rel="noopener noreferrer"
+              >cloud-auto-save-x</a>
+              ，全新自动追剧一体化平台 更智能、更好用；如你计划继续长期使用当前工具，建议顺手点个 Star 并关注新项目动态。
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="project-promo-dismiss"
+          @click="dismissProjectPromotion"
+          aria-label="关闭项目推广提示"
+        >
+          <i class="bi bi-x-lg"></i>
+          <span>已读关闭</span>
+        </button>
+      </section>
       <main>
         <form @submit.prevent="saveConfig" @keydown.enter.prevent>
 
@@ -1613,6 +1646,10 @@
           isTablet: false,
           isCoarsePointer: false,
         },
+        projectPromotion: {
+          visible: false,
+          storageKey: 'cloud_auto_save_project_promo_dismissed_v1',
+        },
         touch: {
           startX: 0,
           startY: 0,
@@ -1779,6 +1816,7 @@
       },
       mounted() {
         this.initTheme();
+        this.initProjectPromotion();
         this.fetchData();
         this.checkNewVersion();
         this.updateViewportFlags();
@@ -1852,6 +1890,15 @@
         },
       },
       methods: {
+        initProjectPromotion() {
+          var dismissed = null;
+          try { dismissed = localStorage.getItem(this.projectPromotion.storageKey); } catch (e) {}
+          this.projectPromotion.visible = dismissed !== '1';
+        },
+        dismissProjectPromotion() {
+          this.projectPromotion.visible = false;
+          try { localStorage.setItem(this.projectPromotion.storageKey, '1'); } catch (e) {}
+        },
         initTheme() {
           var saved = null;
           try { saved = localStorage.getItem('qas_theme'); } catch (e) {}
